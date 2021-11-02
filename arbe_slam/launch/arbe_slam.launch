@@ -1,0 +1,14 @@
+<launch>
+    
+    <param name="robot_description" textfile="$(find arbe_slam)/config/radar_kit.urdf"/>  
+
+    <node pkg="arbe_slam" type="feature_extract"    name="feature_extract"    output="screen">
+      <param name="max_segment_distance" value="0.7" />
+      <param name="min_segment_distance" value="0.2" />
+      <param name="min_segment_number" value="3" />
+      <param name="max_segment_doppler_diff" value="0.5" />
+      <param name="search_radius_rate" value="20" />
+      <param name="static_moving_thre" value="1" />
+    </node>
+
+</launch>

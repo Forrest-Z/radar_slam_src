@@ -1,0 +1,43 @@
+<robot name="radar_robot">  
+  <link name="base_link">  
+  </link>  
+  
+  <link name="image_radar">  
+  </link>  
+  
+  <link name="eagle">   
+  </link>  
+  
+  <link name="ars408">  
+  </link>  
+  
+  <link name="Pandar64">
+  </link> 
+
+
+  <joint name="joint_base_wheel1" type="fixed">  
+    <parent link="base_link"/>  
+    <child link="image_radar"/>  
+    <origin rpy="0.1 0 0" xyz="0 1.5 0"/> 
+  </joint>  
+  
+  <joint name="joint_base_wheel2" type="fixed">  
+    <parent link="base_link"/>  
+    <child link="eagle"/>  
+    <origin rpy="0.03 0 0" xyz="0 0 0"/> 
+  </joint>  
+  
+  <joint name="joint_base_wheel3" type="fixed">  
+    <parent link="base_link"/>  
+    <child link="ars408"/>  
+    <origin rpy="0 0 0" xyz="0 0 0"/> 
+  </joint>  
+  
+  <joint name="joint_base_wheel4" type="fixed">  
+    <parent link="base_link"/>  
+    <child link="Pandar64"/>  
+    <origin rpy="0 0 3.14" xyz="0 0.3 0.6"/> 
+  </joint>  
+</robot> 
+
+
