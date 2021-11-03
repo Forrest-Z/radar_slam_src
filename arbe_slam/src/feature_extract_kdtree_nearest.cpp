@@ -1,6 +1,139 @@
-#include "utility.h"
+#define PCL_NO_PRECOMPIL
+#include <pcl/point_cloud.h>
+#include <pcl/kdtree/kdtree_flann.h>
+#include <pcl/kdtree/impl/kdtree_flann.hpp>
+#include <pcl/common/common.h>
+#include <pcl_conversions/pcl_conversions.h>
+#include <ros/ros.h>
+#include <sensor_msgs/PointCloud2.h>
+
+#include <string>
+#include <vector>
+#include <queue>
+#include <unordered_map>
+#include <algorithm>
 
 using namespace std;
+
+struct  EIGEN_ALIGN16 ArbePointXYZRGBGeneric
+{
+  PCL_ADD_POINT4D;
+  PCL_ADD_RGB;
+  float range;
+  float azimuth;
+  float elevation;
+  float doppler;
+  float power;
+  float range_bin;
+  float azimuth_bin;
+  float elevation_bin;
+  float doppler_bin;
+  float power_value;
+  float timestamp_ms;
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW     // make sure our new allocators are aligned
+};
+
+POINT_CLOUD_REGISTER_POINT_STRUCT(ArbePointXYZRGBGeneric,           // here we assume a XYZRGB + "detectionData" (as fields)
+  (float, x, x)
+  (float, y, y)
+  (float, z, z)
+  (float, rgb, rgb)
+  (float, range, range)
+  (float, azimuth, azimuth)
+  (float, elevation, elevation)
+  (float, doppler, doppler)
+  (float, power, power)
+  (float, range_bin, range_bin)
+  (float, azimuth_bin, azimuth_bin)
+  (float, elevation_bin, elevation_bin)
+  (float, doppler_bin, doppler_bin)
+  (float, power_value, power_value)
+  (float, timestamp_ms, timestamp_ms)
+)
+typedef ArbePointXYZRGBGeneric PointA;
+typedef pcl::PointCloud<PointA> PointCloudA;
+
+// 使用自定义的点云类需要包括一下
+// #define PCL_NO_PRECOMPIL
+// #include <pcl/kdtree/kdtree_flann.h>
+// #include <pcl/kdtree/impl/kdtree_flann.hpp>
+
+
+struct EIGEN_ALIGN16 ArbeObjec
+{
+  PCL_ADD_POINT4D;
+  float range;
+  float azimuth;
+  float elevation;
+  float doppler;
+  float power;
+  float timestamp_ms;
+
+  float length;
+  float width;
+  float high;
+  int quantity;
+  int label;
+
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+};
+
+POINT_CLOUD_REGISTER_POINT_STRUCT(ArbeObjec,           // here we assume a XYZRGB + "detectionData" (as fields)
+  (float, x, x)
+  (float, y, y)
+  (float, z, z)
+  (float, range, range)
+  (float, azimuth, azimuth)
+  (float, elevation, elevation)
+  (float, doppler, doppler)
+  (float, power, power)
+  (float, timestamp_ms, timestamp_ms)
+
+  (float, length, length)
+  (float, width, width)
+  (float, high, high)
+  (float, quantity, quantity)
+  (float, label, label)
+
+)
+typedef ArbeObjec PointAO;
+typedef pcl::PointCloud<PointAO> PointCloudAO;
+
+string arbe_origin_topic = "/arbe/rviz/pointcloud";
+string arbe_segment_topic = "/arbe/rviz/segment";
+string arbe_outlier_topic = "/arbe/rviz/outlier";
+string arbe_static_topic = "/arbe/rviz/static";
+string arbe_moving_topic = "/arbe/rviz/moving";
+string arbe_object_topic = "/arbe/rviz/object";
+string frame_id = "image_radar";
+
+float range_res = 0.639;
+float range_bias = -0.639;
+float azimuth_res = -0.0156;
+float azimuth_bias = 1.0014;
+//-63.94890472226788 -0.8972650848906567 57.37911942429021
+float elevation_res = -0.0212;
+float elevation_bias = 0.339;
+//-16.017821758490438 -1.2133574193589876 19.435342872634198
+float power_res = 0.125;
+float power_bias = 116.06;
+
+float MAX_SEGMENT_DISTANCE = 0.7;
+float MIN_SEGMENT_DISTANCE = 0.2;
+float MIN_SEGMENT_NUMBER = 3;
+float MAX_SEGMENT_DOPPLER_THRE = 0.2;
+int SEARCH_RAIUS_RATE = 30;
+int NEAREST_SEARCH_NUMBER = 6;
+float SEARCH_BIN_THRE = 2.5;
+float STATIC_MOVING_THRE = 0.5;
+
+int MAX_OBJECT = 128 * 5;
+int OUTLIER_LABEL = 99999;
+
+
+int range_number = 640;
+int azimuth_number = 128;
+int elevation_number = 32;
 
 
 class FeatureExtrace {
@@ -12,7 +145,6 @@ private:
   ros::Publisher arbe_static_pub;
   ros::Publisher arbe_moving_pub;
   ros::Publisher arbe_object_pub;
-  ros::Publisher arbe_ego_doppler_pub;
 
   PointCloudA::Ptr arbe_origin_pcl;
   PointCloudA::Ptr arbe_segment_pcl;
@@ -31,30 +163,10 @@ private:
 
   int label_count;
 
-  vector<float> relate_doppler_list;
+  vector<int> relate_doppler_list;
   vector<int> static_index_list;
   vector<int> moving_index_list;
   float ego_doppler;
-
-  //ego doppler KF
-  float Q = 1e-6;
-
-  float ego_doppler_old;
-  float ego_doppler_new;
-  float ego_doppler_pre;
-  float ego_doppler_est;
-
-  float P_old;
-  float P_pre;
-  float P_new;
-
-  float K;
-  float R;
-
-  float A;
-  float H;
-
-  bool ego_doppler_init_flag;
 
 
 public:
@@ -65,9 +177,7 @@ public:
     arbe_outlier_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_outlier_topic, 1);
     arbe_static_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_static_topic, 1);
     arbe_moving_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_moving_topic, 1);
-    arbe_object_pub = nh.advertise<std_msgs::Float32>(arbe_ego_doppler_topic, 1);
-
-    arbe_ego_doppler_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_object_topic, 1);
+    arbe_object_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_object_topic, 1);
 
     nh.getParam("max_segment_distance", MAX_SEGMENT_DISTANCE);
     nh.getParam("min_segment_distance", MIN_SEGMENT_DISTANCE);
@@ -78,7 +188,7 @@ public:
 
     allocateMemory();
 
-    if (ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Info))//Debug))
+    if (ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Debug))//Info))
     {
       ros::console::notifyLoggerLevelsChanged();
     }
@@ -94,47 +204,11 @@ public:
     arbe_object_pcl.reset(new PointCloudAO());
 
     kdtree_origin.reset(new pcl::KdTreeFLANN<PointA>());
-    inti_ego_doppler_kf();
-  }
 
-  void inti_ego_doppler_kf()
-  {
-    Q = 1e-6;
-
-    ego_doppler_old = 0;
-    ego_doppler_new = 0;
-    ego_doppler_pre = 0;
-    ego_doppler_est = 0;
-
-    P_old = 1;
-    P_pre = 0;
-    P_new = 0;
-
-    K = 0;
-    R = 0.1 * 0.1;
-
-    A = 0;
-    H = 0;
-
-    ego_doppler_init_flag = false;
-  }
-
-  void ego_doppler_kf()
-  {
-    ego_doppler_pre = A * ego_doppler_old;
-    P_pre = A * P_old + Q;
-
-    K = P_pre / (P_pre + R);
-    ego_doppler_est = ego_doppler_pre + K * (ego_doppler_new - H * ego_doppler_pre);
-    P_new = (1 - K * H) * P_pre;
-
-    P_old = P_new;
-    ego_doppler_old = ego_doppler_est;
-    ego_doppler = ego_doppler_est;
-
-    std_msgs::Float32 ego_doppler_msg;
-    ego_doppler_msg.data = (double)ego_doppler;
-    arbe_ego_doppler_pub.publish(ego_doppler_msg);
+    for (int i = 0;i < MAX_OBJECT;i++)
+    {
+      label_color.push_back(FeatureExtrace::get_lable_color(i));
+    }
   }
 
   void pointcloud_callback(const sensor_msgs::PointCloud2ConstPtr& arbe_origin_ros)
@@ -147,8 +221,6 @@ public:
 
     calculate_ego_doppler();
     end_doppler = clock();
-
-    // ceres_solver_ego_doppler();
 
     segment_pointcloud();
     end_segment = clock();
@@ -175,38 +247,34 @@ public:
     kdtree_origin->setInputCloud(arbe_origin_pcl);
   }
 
-  float ceres_solver_ego_doppler()
+
+  void segment_pointcloud()
   {
-    clock_t start, end;
-    start = clock();
-    //ceres::LossFunction *loss_function = NULL;
-    ceres::LossFunction* loss_function = new ceres::HuberLoss(0.1);
-    ceres::Problem::Options problem_options;
-
-    ceres::Problem problem(problem_options);
-    problem.AddParameterBlock(motion_estimate, 2);
-
-    for (int i = 0; i < int(arbe_origin_pcl->size() / 5);i++)
+    static_index_list.clear();
+    for (size_t i = 0; i < arbe_origin_pcl->size();i++)
     {
-      PointA point = arbe_origin_pcl->points[i * 5];
-      ceres::CostFunction* cost_function = RadarDopplerFactor::Create
-      ((double)point.doppler, (double)point.azimuth, (double)(point.elevation + 0.1));
-      problem.AddResidualBlock(cost_function, loss_function, motion_estimate);
-
+      if (abs(relate_doppler_list[i] - ego_doppler) > STATIC_MOVING_THRE)
+      {
+        static_index_list.push_back(i);
+      }
     }
-    ceres::Solver::Options options;
-    options.linear_solver_type = ceres::DENSE_QR;
-    options.max_num_iterations = 4;
-    options.minimizer_progress_to_stdout = false;
-    ceres::Solver::Summary summary;
-    ceres::Solve(options, &problem, &summary);
 
-    end = clock();
-    float duration = (double)(end - start) / CLOCKS_PER_SEC;
+    ROS_INFO("segment_pointcloud : origin moving points : %d!", (int)static_index_list.size());
 
-    ROS_INFO("ceres_solver_ego_doppler : velocity_y %f, yaw %f, duration %f s.",
-      motion_estimate[0], motion_estimate[1], duration);
+    label_count = 1;
+    point_label.clear();
+    point_label.resize(arbe_origin_pcl->size(), 0);
+    for (int index : static_index_list)
+    {
+      if (point_label[index] == 0)
+      {
+        label_pointcloud(index);
+        point_label[index] = 1;
+        ROS_DEBUG("segment_pointcloud : label point %d.", index);
+      }
+    }
   }
+
 
   float calculate_ego_doppler()
   {
@@ -220,20 +288,17 @@ public:
       float relate_doppler = point.doppler / (cos(point.azimuth) * cos(point.elevation));
       int relate_doppler_ten = (int)(10 * relate_doppler);
       relate_doppler_list.push_back(relate_doppler);
-      if (point.range > MIN_CALCULATE_EGO_DOPPLER_RADIUS)
-      {
-        if (doppler_counter.find(to_string(relate_doppler_ten)) == doppler_counter.end())
-        {
-          doppler_counter.emplace(to_string(relate_doppler_ten), 1);
-        }
-        else {
-          doppler_counter[to_string(relate_doppler_ten)] += 1;
-        }
-      }
 
+      if (doppler_counter.find(to_string(relate_doppler_ten)) == doppler_counter.end())
+      {
+        doppler_counter.emplace(to_string(relate_doppler_ten), 1);
+      }
+      else {
+        doppler_counter[to_string(relate_doppler_ten)] += 1;
+      }
     }
     PointA point_0 = arbe_origin_pcl->points[0];
-    int ego_doppler_ten = (int)(10 * point_0.doppler / (cos(point_0.azimuth) * cos(point_0.elevation)));
+    float ego_doppler_ten = (int)(10 * point_0.doppler / (cos(point_0.azimuth) * cos(point_0.elevation)));
     int max_counter = 0;
 
     for (auto iter = doppler_counter.begin(); iter != doppler_counter.end(); ++iter)
@@ -245,52 +310,13 @@ public:
         max_counter = iter->second;
       }
     }
-
-    float ego_doppler_sta = (float)ego_doppler_ten / 10.;
-
-    if (ego_doppler_init_flag)
-    {
-      ego_doppler_new = ego_doppler_sta;
-      ego_doppler_kf();
-
-    }
-    else {
-      ego_doppler = ego_doppler_old = ego_doppler_sta;
-    }
-
-
-    ROS_INFO("calculate_ego_doppler : ego doppler new: %f,ego doppler estimate: %f, max counter : %d, total counter : %d.",
-      ego_doppler_sta, ego_doppler, max_counter, (int)arbe_origin_pcl->size());
+    ego_doppler = ego_doppler_ten / 10.;
+    ROS_INFO("calculate_ego_doppler : ego doppler : %f, max counter : %d, total counter : %d.",
+      ego_doppler, max_counter, (int)arbe_origin_pcl->size());
     doppler_counter.clear();
+
   }
 
-  void segment_pointcloud()
-  {
-    moving_index_list.clear();
-    for (size_t i = 0; i < arbe_origin_pcl->size();i++)
-    {
-      if (abs(relate_doppler_list[i] - ego_doppler) > STATIC_MOVING_THRE)
-      {
-        moving_index_list.push_back(i);
-        // ROS_INFO("point %d, doppler diff : %f", (int)i, abs(relate_doppler_list[i] - ego_doppler));
-      }
-    }
-
-    ROS_INFO("segment_pointcloud : origin moving points : %d!", (int)moving_index_list.size());
-
-    label_count = 1;
-    point_label.clear();
-    point_label.resize(arbe_origin_pcl->size(), 0);
-    for (int index : moving_index_list)
-    {
-      if (point_label[index] == 0)
-      {
-        label_pointcloud(index);
-        point_label[index] = 1;
-        ROS_DEBUG("segment_pointcloud : label point %d.", index);
-      }
-    }
-  }
 
   void label_pointcloud(int index) {
 
@@ -317,13 +343,7 @@ public:
       //   centrer_index, (int)point_bfs_queue.size());
       // ROS_DEBUG("point %d, search radius %f.", centrer_index, point_center.range / SEARCH_RAIUS_RATE);
 
-      float search_radius = point_center.range / SEARCH_RAIUS_RATE;
-      if (search_radius < range_res * 1.5)
-      {
-        search_radius = range_res * 1.5;
-      }
-
-      if (kdtree_origin->radiusSearch(point_center, search_radius,
+      if (kdtree_origin->nearestKSearch(point_center, NEAREST_SEARCH_NUMBER,
         point_search_ind, point_search_sq_dis) > 0)
       {
         for (int j = 0;j < point_search_ind.size();j++)
@@ -335,10 +355,13 @@ public:
 
             PointA point_search = arbe_origin_pcl->points[search_index];
             float doppler_diff = abs(point_center.doppler - point_search.doppler);
-            float azimuth_diff = abs(point_center.azimuth - point_search.azimuth);
-            float elevation_diff = abs(point_center.elevation - point_search.elevation);
+            float range_bin_diff = abs(point_center.range_bin - point_search.range_bin);
+            float azimuth_bin_diff = abs(point_center.azimuth_bin - point_search.azimuth_bin);
+            float elevation_bin_diff = abs(point_center.elevation_bin - point_search.elevation_bin);
 
-            if (doppler_diff < MAX_SEGMENT_DOPPLER_THRE && (azimuth_diff < abs(azimuth_res * 2.5) && elevation_diff < abs(elevation_res * 2.5)))
+            if (distance < MIN_SEGMENT_DISTANCE | (azimuth_bin_diff < SEARCH_BIN_THRE
+              && elevation_bin_diff < SEARCH_BIN_THRE && range_bin_diff < SEARCH_BIN_THRE
+              && doppler_diff < MAX_SEGMENT_DOPPLER_THRE))
             {
               segmentation_index.push_back(search_index);
               point_bfs_queue.push(search_index);
@@ -427,12 +450,13 @@ public:
 
   void publish_pointcloud()
   {
+    clock_t start, end_1, end_2, end_3, end_4, end_5, end_6, end_7;
+    start = clock();
 
     arbe_segment_pcl->clear();
+    end_1 = clock();
     arbe_outlier_pcl->clear();
-    arbe_static_pcl->clear();
-
-
+    end_2 = clock();
     for (int i = 0;i < arbe_origin_pcl->size();i++)
     {
       int label = point_label[i];
@@ -444,15 +468,12 @@ public:
       {
         arbe_segment_pcl->push_back(arbe_origin_pcl->points[i]);
         arbe_segment_pcl->back().power_value = label;
-        arbe_segment_pcl->back().power = relate_doppler_list[i];
-        // ROS_DEBUG("publish_pointcloud : point %d, doppler diff : %f", (int)i, abs(relate_doppler_list[i] - ego_doppler));
       }
       else {
         arbe_static_pcl->push_back(arbe_origin_pcl->points[i]);
-        arbe_static_pcl->back().power = relate_doppler_list[i];
       }
     }
-
+    end_3 = clock();
     ROS_INFO("publish_pointcloud : segment %d segment point into %d objects, get %d outlier!",
       (int)arbe_segment_pcl->size(), (int)label_count, (int)arbe_outlier_pcl->size());
 
@@ -460,29 +481,77 @@ public:
     pcl::toROSMsg(*arbe_segment_pcl, arbe_segment_ros);
     arbe_segment_ros.header = cloud_header;
     arbe_segment_pub.publish(arbe_segment_ros);
-
+    end_4 = clock();
 
     sensor_msgs::PointCloud2 arbe_outlier_ros;
     pcl::toROSMsg(*arbe_outlier_pcl, arbe_outlier_ros);
     arbe_outlier_ros.header = cloud_header;
     arbe_outlier_pub.publish(arbe_outlier_ros);
-
+    end_5 = clock();
 
     sensor_msgs::PointCloud2 arbe_static_ros;
     pcl::toROSMsg(*arbe_static_pcl, arbe_static_ros);
     arbe_static_ros.header = cloud_header;
     arbe_static_pub.publish(arbe_static_ros);
-
+    end_6 = clock();
 
     sensor_msgs::PointCloud2 arbe_object_ros;
     pcl::toROSMsg(*arbe_object_pcl, arbe_object_ros);
     arbe_object_ros.header = cloud_header;
     arbe_object_pub.publish(arbe_object_ros);
     arbe_object_pcl->clear();
+    end_7 = clock();
+
+    double duration_1 = (double)(end_1 - start) / CLOCKS_PER_SEC;
+    double duration_2 = (double)(end_2 - start) / CLOCKS_PER_SEC;
+    double duration_3 = (double)(end_3 - start) / CLOCKS_PER_SEC;
+    double duration_4 = (double)(end_4 - start) / CLOCKS_PER_SEC;
+    double duration_5 = (double)(end_5 - start) / CLOCKS_PER_SEC;
+    double duration_6 = (double)(end_6 - start) / CLOCKS_PER_SEC;
+    double duration_7 = (double)(end_7 - start) / CLOCKS_PER_SEC;
+
+
+    ROS_DEBUG(" %f -> %f -> %f -> %f -> %f -> %f -> %f ",
+      duration_1, duration_2, duration_3, duration_4, duration_5, duration_6, duration_7);
 
   }
 
+
+  vector<int> get_lable_color(int index)
+  {
+    int group_size = 128;
+    int group_num = 5;
+    int group = (index < 640) ? (index / group_size) : 5;
+    vector<int> ret;
+    vector<vector<int>> color = { { 255, 0, 255 }, { 0, 0, 255 }, { 0, 255, 255 },
+     { 0, 255, 0 }, { 255,255, 0 }, { 255, 255, 255 } };
+    ret = color[group];
+    switch (group)
+    {
+    case 0:
+      ret[0] = (int)(255 - (index % group_size) * group_num);
+      break;
+    case 1:
+      ret[1] = (int)((index % group_size) * group_num);
+      break;
+    case 2:
+      ret[2] = (int)(255 - (index % group_size) * group_num);
+      break;
+    case 3:
+      ret[0] = (int)((index % group_size) * group_num);
+      break;
+    case 4:
+      ret[1] = (int)((255 - index % group_size) * group_num);
+      break;
+    default:
+      break;
+    }
+    // cout << dopplor << "\t" << min_doppler << "\t" << dopplor_range << "\t" << index << "\t" << ret << endl;
+    return ret;
+  }
+
 };
+
 
 int main(int argc, char** argv)
 {
