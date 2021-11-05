@@ -11,4 +11,9 @@
       <param name="static_moving_thre" value="1" />
     </node>
 
+    <node pkg="arbe_slam" type="radar_odometry"    name="radar_odometry"    output="screen">   
+    <param name="frame_id" value="/odometry" />
+    <param name="child_frame_id" value="/base_link" />
+    </node>
+
 </launch>

@@ -1,8 +1,5 @@
 #include "utility.h"
 
-using namespace std;
-
-
 class FeatureExtrace {
 private:
   ros::NodeHandle nh;
@@ -10,17 +7,24 @@ private:
   ros::Publisher arbe_segment_pub;
   ros::Publisher arbe_outlier_pub;
   ros::Publisher arbe_static_pub;
+  ros::Publisher arbe_static_front_pub;
   ros::Publisher arbe_moving_pub;
+  ros::Publisher arbe_moving_front_pub;
   ros::Publisher arbe_object_pub;
+  ros::Publisher arbe_object_marker_pub;
+
   ros::Publisher arbe_ego_doppler_pub;
 
   PointCloudA::Ptr arbe_origin_pcl;
   PointCloudA::Ptr arbe_segment_pcl;
   PointCloudA::Ptr arbe_outlier_pcl;
   PointCloudA::Ptr arbe_static_pcl;
+  PointCloudA::Ptr arbe_static_front_pcl;
   PointCloudA::Ptr arbe_moving_pcl;
+  PointCloudA::Ptr arbe_moving_front_pcl;
   PointCloudAO::Ptr arbe_object_pcl;
 
+  visualization_msgs::MarkerArray arbe_object_marker_msg;
 
   std_msgs::Header cloud_header;
   pcl::KdTreeFLANN<PointA>::Ptr kdtree_origin;
@@ -37,7 +41,7 @@ private:
   float ego_doppler;
 
   //ego doppler KF
-  float Q = 1e-6;
+  float Q;
 
   float ego_doppler_old;
   float ego_doppler_new;
@@ -64,10 +68,13 @@ public:
     arbe_segment_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_segment_topic, 1);
     arbe_outlier_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_outlier_topic, 1);
     arbe_static_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_static_topic, 1);
+    arbe_static_front_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_static_front_topic, 1);
     arbe_moving_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_moving_topic, 1);
-    arbe_object_pub = nh.advertise<std_msgs::Float32>(arbe_ego_doppler_topic, 1);
+    arbe_moving_front_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_moving_front_topic, 1);
+    arbe_object_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_object_topic, 1);
+    arbe_object_marker_pub = nh.advertise<visualization_msgs::MarkerArray>(arbe_object_marker_topic, 1);
 
-    arbe_ego_doppler_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_object_topic, 1);
+    arbe_ego_doppler_pub = nh.advertise<std_msgs::Float64>(arbe_ego_doppler_topic, 1);
 
     nh.getParam("max_segment_distance", MAX_SEGMENT_DISTANCE);
     nh.getParam("min_segment_distance", MIN_SEGMENT_DISTANCE);
@@ -76,21 +83,23 @@ public:
     nh.getParam("search_radius_rate", SEARCH_RAIUS_RATE);
     nh.getParam("static_moving_thre", STATIC_MOVING_THRE);
 
-    allocateMemory();
+    allocate_memory();
 
-    if (ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Info))//Debug))
+    if (ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Warn))//Debug))
     {
       ros::console::notifyLoggerLevelsChanged();
     }
     cout << "init!" << endl;
   }
 
-  void allocateMemory() {
+  void allocate_memory() {
     arbe_origin_pcl.reset(new PointCloudA());
     arbe_segment_pcl.reset(new PointCloudA());
     arbe_outlier_pcl.reset(new PointCloudA());
     arbe_static_pcl.reset(new PointCloudA());
+    arbe_static_front_pcl.reset(new PointCloudA());
     arbe_moving_pcl.reset(new PointCloudA());
+    arbe_moving_front_pcl.reset(new PointCloudA());
     arbe_object_pcl.reset(new PointCloudAO());
 
     kdtree_origin.reset(new pcl::KdTreeFLANN<PointA>());
@@ -132,7 +141,7 @@ public:
     ego_doppler_old = ego_doppler_est;
     ego_doppler = ego_doppler_est;
 
-    std_msgs::Float32 ego_doppler_msg;
+    std_msgs::Float64 ego_doppler_msg;
     ego_doppler_msg.data = (double)ego_doppler;
     arbe_ego_doppler_pub.publish(ego_doppler_msg);
   }
@@ -171,6 +180,7 @@ public:
   {
     ROS_INFO("copy_pointcloud : get %d origin ROS point!", arbe_origin_ros->width);
     cloud_header = arbe_origin_ros->header;
+    cloud_header.stamp = ros::Time::now();
     pcl::fromROSMsg(*arbe_origin_ros, *arbe_origin_pcl);
     kdtree_origin->setInputCloud(arbe_origin_pcl);
   }
@@ -210,7 +220,7 @@ public:
 
   float calculate_ego_doppler()
   {
-    unordered_map<string, int> doppler_counter;
+    unordered_map<int, float, IntHash> doppler_counter;
 
     relate_doppler_list.clear();
 
@@ -222,12 +232,12 @@ public:
       relate_doppler_list.push_back(relate_doppler);
       if (point.range > MIN_CALCULATE_EGO_DOPPLER_RADIUS)
       {
-        if (doppler_counter.find(to_string(relate_doppler_ten)) == doppler_counter.end())
+        if (doppler_counter.find(relate_doppler_ten) == doppler_counter.end())
         {
-          doppler_counter.emplace(to_string(relate_doppler_ten), 1);
+          doppler_counter.emplace(relate_doppler_ten, abs(point.azimuth));
         }
         else {
-          doppler_counter[to_string(relate_doppler_ten)] += 1;
+          doppler_counter[relate_doppler_ten] += abs(point.azimuth);
         }
       }
 
@@ -240,8 +250,9 @@ public:
     {
       if (iter->second > max_counter)
       {
-        stringstream stream(iter->first);
-        stream >> ego_doppler_ten;
+        // stringstream stream(iter->first);
+        // stream >> ego_doppler_ten;
+        ego_doppler_ten = iter->first;
         max_counter = iter->second;
       }
     }
@@ -257,7 +268,6 @@ public:
     else {
       ego_doppler = ego_doppler_old = ego_doppler_sta;
     }
-
 
     ROS_INFO("calculate_ego_doppler : ego doppler new: %f,ego doppler estimate: %f, max counter : %d, total counter : %d.",
       ego_doppler_sta, ego_doppler, max_counter, (int)arbe_origin_pcl->size());
@@ -374,9 +384,32 @@ public:
     vector<float> doppler_list;
     vector<float> power_list;
 
-    for (int index : segmentation_index)
+    unordered_map<pair<int, int>, pair<int, float>, PairHash>  moving_point_map;
+    for (int i : segmentation_index)
     {
-      PointA point = arbe_origin_pcl->points[index];
+      PointA point = arbe_origin_pcl->points[i];
+      pair<int, int> row_col((int)point.azimuth_bin, (int)point.elevation_bin);
+      if (moving_point_map.find(row_col) == moving_point_map.end())
+      {
+        // pair<int, float> point_info(i, point.range);
+        pair<int, float> point_info(i, point.power);
+        moving_point_map.emplace(row_col, point_info);
+        arbe_moving_front_pcl->push_back(point);
+      }
+      else {
+        // if (point.range < moving_point_map[row_col].second)
+        if (point.power < moving_point_map[row_col].second)
+        {
+          // pair<int, float> point_info(i, point.range);
+          pair<int, float> point_info(i, point.power);
+          moving_point_map.emplace(row_col, point_info);
+        }
+      }
+    }
+
+    for (auto iter : moving_point_map)
+    {
+      PointA point = arbe_origin_pcl->points[iter.second.first];
       x_list.push_back(point.x);
       y_list.push_back(point.y);
       z_list.push_back(point.z);
@@ -401,11 +434,11 @@ public:
 
 
     float x_mean = (x_min + x_max) / 2;
-    float width = (x_max - x_min);
+    float width = x_max > x_min ? (x_max - x_min) : 0.5;
     float y_mean = (y_min + y_max) / 2;
-    float length = (y_max - y_min);
+    float length = y_max > y_min ? (y_max - y_min) : 0.5;
     float z_mean = (z_min + z_max) / 2;
-    float high = (z_max - z_min);
+    float high = z_max > z_min ? (z_max - z_min) : 0.5;
 
     float doppler_mean = (doppler_min + doppler_max) / 2;
     float power_mean = (power_min + power_max) / 2;
@@ -422,16 +455,40 @@ public:
     arbe_object.length = length;
     arbe_object.high = high;
 
+    arbe_object.quantity = x_list.size();
+    arbe_object.label = label;
+
     arbe_object_pcl->push_back(arbe_object);
+
+    visualization_msgs::Marker arbe_object_marker;
+    arbe_object_marker.header = cloud_header;
+    arbe_object_marker.ns = "arbe_object";
+    arbe_object_marker.id = label;
+    arbe_object_marker.type = visualization_msgs::Marker::CUBE;
+    arbe_object_marker.action = visualization_msgs::Marker::ADD;
+
+    arbe_object_marker.pose.position.x = x_mean;
+    arbe_object_marker.pose.position.y = y_mean;
+    arbe_object_marker.pose.position.z = z_mean;
+    arbe_object_marker.pose.orientation.w = 1;
+
+    arbe_object_marker.scale.x = width;
+    arbe_object_marker.scale.y = length;
+    arbe_object_marker.scale.z = high;
+
+    arbe_object_marker.color.r = 1.0;
+    arbe_object_marker.color.g = 1.0;
+    arbe_object_marker.color.b = 1.0;
+    arbe_object_marker.color.a = 0.3;
+
+    arbe_object_marker.lifetime = ros::Duration(0.1);
+
+    arbe_object_marker_msg.markers.push_back(arbe_object_marker);
   }
 
   void publish_pointcloud()
   {
-
-    arbe_segment_pcl->clear();
-    arbe_outlier_pcl->clear();
-    arbe_static_pcl->clear();
-
+    unordered_map<pair<int, int>, pair<int, float>, PairHash>  static_point_map;
 
     for (int i = 0;i < arbe_origin_pcl->size();i++)
     {
@@ -442,25 +499,56 @@ public:
       }
       else if (label != 0)
       {
-        arbe_segment_pcl->push_back(arbe_origin_pcl->points[i]);
-        arbe_segment_pcl->back().power_value = label;
-        arbe_segment_pcl->back().power = relate_doppler_list[i];
+        arbe_moving_pcl->push_back(arbe_origin_pcl->points[i]);
+        arbe_moving_pcl->back().power_value = label;
+        arbe_moving_pcl->back().power = relate_doppler_list[i];
         // ROS_DEBUG("publish_pointcloud : point %d, doppler diff : %f", (int)i, abs(relate_doppler_list[i] - ego_doppler));
       }
       else {
-        arbe_static_pcl->push_back(arbe_origin_pcl->points[i]);
+
+        PointA point = arbe_origin_pcl->points[i];
+
+        arbe_static_pcl->push_back(point);
         arbe_static_pcl->back().power = relate_doppler_list[i];
+
+        pair<int, int> row_col((int)point.azimuth_bin, (int)point.elevation_bin);
+
+        if (static_point_map.find(row_col) == static_point_map.end())
+        {
+          // pair<int, float> point_info(i, point.range);
+          pair<int, float> point_info(i, point.power);
+          static_point_map.emplace(row_col, point_info);
+        }
+        else {
+          // if (point.range < static_point_map[row_col].second)
+          if (point.power < static_point_map[row_col].second)
+          {
+            // pair<int, float> point_info(i, point.range);
+            pair<int, float> point_info(i, point.power);
+            static_point_map.emplace(row_col, point_info);
+          }
+        }
       }
     }
 
+    for (auto iter : static_point_map)
+    {
+      PointA point = arbe_origin_pcl->points[iter.second.first];
+      arbe_static_front_pcl->push_back(point);
+    }
+
     ROS_INFO("publish_pointcloud : segment %d segment point into %d objects, get %d outlier!",
-      (int)arbe_segment_pcl->size(), (int)label_count, (int)arbe_outlier_pcl->size());
+      (int)arbe_moving_pcl->size(), (int)label_count, (int)arbe_outlier_pcl->size());
 
-    sensor_msgs::PointCloud2 arbe_segment_ros;
-    pcl::toROSMsg(*arbe_segment_pcl, arbe_segment_ros);
-    arbe_segment_ros.header = cloud_header;
-    arbe_segment_pub.publish(arbe_segment_ros);
+    sensor_msgs::PointCloud2 arbe_moving_ros;
+    pcl::toROSMsg(*arbe_moving_pcl, arbe_moving_ros);
+    arbe_moving_ros.header = cloud_header;
+    arbe_moving_pub.publish(arbe_moving_ros);
 
+    sensor_msgs::PointCloud2 arbe_moving_front_ros;
+    pcl::toROSMsg(*arbe_moving_front_pcl, arbe_moving_front_ros);
+    arbe_moving_front_ros.header = cloud_header;
+    arbe_moving_front_pub.publish(arbe_moving_front_ros);
 
     sensor_msgs::PointCloud2 arbe_outlier_ros;
     pcl::toROSMsg(*arbe_outlier_pcl, arbe_outlier_ros);
@@ -473,13 +561,27 @@ public:
     arbe_static_ros.header = cloud_header;
     arbe_static_pub.publish(arbe_static_ros);
 
+    sensor_msgs::PointCloud2 arbe_static_front_ros;
+    pcl::toROSMsg(*arbe_static_front_pcl, arbe_static_front_ros);
+    arbe_static_front_ros.header = cloud_header;
+    arbe_static_front_pub.publish(arbe_static_front_ros);
+
 
     sensor_msgs::PointCloud2 arbe_object_ros;
     pcl::toROSMsg(*arbe_object_pcl, arbe_object_ros);
     arbe_object_ros.header = cloud_header;
     arbe_object_pub.publish(arbe_object_ros);
-    arbe_object_pcl->clear();
 
+    arbe_object_marker_pub.publish(arbe_object_marker_msg);
+
+    arbe_object_marker_msg.markers.clear();
+    arbe_object_pcl->clear();
+    arbe_segment_pcl->clear();
+    arbe_outlier_pcl->clear();
+    arbe_moving_pcl->clear();
+    arbe_static_pcl->clear();
+    arbe_moving_front_pcl->clear();
+    arbe_static_front_pcl->clear();
   }
 
 };
