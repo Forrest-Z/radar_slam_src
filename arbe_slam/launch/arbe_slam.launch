@@ -3,7 +3,7 @@
     <param name="robot_description" textfile="$(find arbe_slam)/config/radar_kit.urdf"/>  
 
     <node pkg="arbe_slam" type="feature_extract"    name="feature_extract"    output="screen">
-      <param name="max_segment_distance" value="0.7" />
+      <param name="max_segment_distance" value="1.0" />
       <param name="min_segment_distance" value="0.2" />
       <param name="min_segment_number" value="3" />
       <param name="max_segment_doppler_diff" value="0.2" />
@@ -14,6 +14,10 @@
     <node pkg="arbe_slam" type="radar_odometry"    name="radar_odometry"    output="screen">   
     <param name="frame_id" value="/odometry" />
     <param name="child_frame_id" value="/base_link" />
+    <param name="max_icp_number" value="20" />
+    <param name="uniform_sampleing_radius" value="0.02" />
+    
+    
     </node>
 
 </launch>

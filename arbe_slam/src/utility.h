@@ -155,19 +155,21 @@ struct IntHash {
 
 
 string arbe_origin_topic = "/arbe/rviz/pointcloud";
-string arbe_segment_topic = "/arbe/rviz/segment";
-string arbe_outlier_topic = "/arbe/rviz/outlier";
-string arbe_static_topic = "/arbe/rviz/static";
-string arbe_static_front_topic = "/arbe/rviz/static_front";
-string arbe_moving_topic = "/arbe/rviz/moving";
-string arbe_moving_front_topic = "/arbe/rviz/moving_front";
-string arbe_object_topic = "/arbe/rviz/object";
-string arbe_object_marker_topic = "/arbe/rviz/object_marker";
+string arbe_project_topic = "/arbe/feature/project";
+string arbe_outlier_topic = "/arbe/feature/outlier";
+string arbe_static_topic = "/arbe/feature/static";
+string arbe_static_front_topic = "/arbe/feature/static_front";
+string arbe_moving_topic = "/arbe/feature/moving";
+string arbe_moving_front_topic = "/arbe/feature/moving_front";
+string arbe_object_topic = "/arbe/feature/object";
+string arbe_object_marker_topic = "/arbe/feature/object_marker";
+string arbe_ego_doppler_topic = "/arbe/feature/ego_doppler";
 
-string arbe_radar_odometry_topic = "/arbe/slam/radar_odometry";
-string arbe_radar_path_topic = "/arbe/slam/radar_path";
+string arbe_radar_odometry_topic = "/arbe/odometry/radar_odometry";
+string arbe_radar_path_topic = "/arbe/odometry/radar_path";
+string arbe_feature_xyz_us_old_icp_topic = "/arbe/odometry/feature_xyz_us_old_icp";
+string icp_score_topic = "/arbe/odometry/icp_score";
 
-string arbe_ego_doppler_topic = "/arbe/ego_doppler";
 
 string frame_id = "image_radar";
 
@@ -188,6 +190,9 @@ float MIN_SEGMENT_NUMBER = 3;
 float MAX_SEGMENT_DOPPLER_THRE = 0.2;
 int SEARCH_RAIUS_RATE = 30;
 float STATIC_MOVING_THRE = 0.3;
+float MAX_OBJECT_DISTANCE = 1;
+float Min_OBJECT_DOPPLER = 0.2;
+float MAX_OBJECT_DOPPLER = 1;
 
 int MAX_OBJECT = 128 * 5;
 int OUTLIER_LABEL = 99999;
@@ -204,3 +209,5 @@ double motion_estimate[3] = { 0,0 };
 
 //需要使用xyz类型的点云
 
+int MAX_ICP_NUMBER = 20;
+float UNIFORM_SAMPLEING_RADIUS = 0.01;
