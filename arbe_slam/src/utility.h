@@ -6,7 +6,11 @@
 #include <pcl/filters/uniform_sampling.h>
 #include <pcl/common/common.h>
 #include <pcl/pcl_macros.h>
+#include <pcl/features/moment_of_inertia_estimation.h>
 #include <pcl_conversions/pcl_conversions.h>
+#include <sensor_msgs/CompressedImage.h>
+#include <opencv2/opencv.hpp>
+
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <visualization_msgs/Marker.h>
@@ -27,7 +31,7 @@
 #include <algorithm>
 
 #include "ceres_factor.hpp"
-
+#include "arbe_slam/CANROS.h"
 
 using namespace std;
 
@@ -119,6 +123,9 @@ typedef pcl::PointXYZ PointT;
 typedef pcl::PointCloud<PointT> PointCloudT;
 
 
+typedef pcl::PointXYZI PointI;
+typedef pcl::PointCloud<PointI> PointCloudI;
+
 struct Vector2iHash {
   size_t operator()(const vector<int>& v) const {
     std::hash<int> hasher;
@@ -154,6 +161,15 @@ struct IntHash {
 };
 
 
+typedef struct
+{
+  int16_t angle;
+  int16_t cmd;
+  uint16_t speed;
+  int8_t torque;
+}SteeringReport;
+
+
 string arbe_origin_topic = "/arbe/rviz/pointcloud";
 string arbe_project_topic = "/arbe/feature/project";
 string arbe_outlier_topic = "/arbe/feature/outlier";
@@ -163,7 +179,16 @@ string arbe_moving_topic = "/arbe/feature/moving";
 string arbe_moving_front_topic = "/arbe/feature/moving_front";
 string arbe_object_topic = "/arbe/feature/object";
 string arbe_object_marker_topic = "/arbe/feature/object_marker";
+
+string arbe_os_cfar_topic = "/arbe/feature/os_cfar";
+string arbe_project_image_topic = "/arbe/feature/project_image/compressed";
+string dbw_topic = "/dbw_rx";
+
+
 string arbe_ego_doppler_topic = "/arbe/feature/ego_doppler";
+string arbe_ego_doppler_kf_topic = "/arbe/feature/ego_doppler_kf";
+string arbe_ego_doppler_x_topic = "/arbe/feature/ego_doppler_x";
+string arbe_ego_doppler_y_topic = "/arbe/feature/ego_doppler_y";
 
 string arbe_radar_odometry_topic = "/arbe/odometry/radar_odometry";
 string arbe_radar_path_topic = "/arbe/odometry/radar_path";
@@ -197,17 +222,23 @@ float MAX_OBJECT_DOPPLER = 1;
 int MAX_OBJECT = 128 * 5;
 int OUTLIER_LABEL = 99999;
 
-float MIN_CALCULATE_EGO_DOPPLER_RADIUS = 30;
+float MIN_CALCULATE_EGO_DOPPLER_RADIUS = 20;
 
 int range_number = 640;
 int azimuth_number = 128;
 int elevation_number = 32;
 
-
-double motion_estimate[3] = { 0,0 };
-
+double motion_estimate[2] = { 0,0 };
 
 //需要使用xyz类型的点云
 
 int MAX_ICP_NUMBER = 20;
 float UNIFORM_SAMPLEING_RADIUS = 0.01;
+
+
+int OS_CFAR_RADIUS = 2;
+int MIN_OS_CFAR_NUMBER = 16; // total 297
+float OS_CFAR_A = 5.8;
+
+int ROW = 512;
+int COL = 128;

@@ -2,6 +2,8 @@
 #include <ceres/rotation.h>
 #include <math.h>
 
+double mount_y = 1;
+
 struct RadarDopplerFactor
 {
   RadarDopplerFactor(double doppler_, double azimuth_, double elevation_)
@@ -11,7 +13,7 @@ struct RadarDopplerFactor
   bool operator()(const T* motion_estimate, T* residual) const
   {
     residual[0] = (motion_estimate[0] * cos(elevation) * cos(azimuth)
-      + (motion_estimate[1]) * sin(elevation) * sin(azimuth)) - doppler;
+      + (motion_estimate[1] * mount_y) * sin(elevation) * sin(azimuth)) - doppler;
 
     return true;
   }

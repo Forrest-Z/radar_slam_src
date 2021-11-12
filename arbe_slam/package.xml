@@ -65,6 +65,7 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>tf</exec_depend>
+  <exec_depend>message_generation</exec_depend>
 
 
   <!-- The export tag contains other, unspecified, tags -->

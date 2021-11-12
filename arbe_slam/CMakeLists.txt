@@ -13,11 +13,23 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
 )
 
+add_message_files(
+  FILES
+  CANROS.msg
+)
+
+generate_messages(
+  DEPENDENCIES
+  std_msgs
+)
 
 find_package(PCL)
 include_directories(${PCL_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
 
+find_package(OpenCV 3.3 REQUIRED)
+include_directories(${OpenCV_INCLUDE_DIRS})
+link_directories(${OpenCV_LIBRARY_DIRS})
 
 find_package(Ceres REQUIRED)
 include_directories(${CERES_INCLUDE_DIRS})
@@ -41,19 +53,13 @@ target_link_libraries(feature_extract
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
   ${CERES_LIBRARIES}
+  ${OpenCV_LIBRARIES}
 )
 
-add_executable(radar_odometry 
-  src/radar_odometry.cpp
-)
-target_link_libraries(radar_odometry 
-  ${catkin_LIBRARIES}
-  ${PCL_LIBRARIES}
-)
-
-add_executable(odometry_demo 
-  src/odometry_demo.cpp
-)
-target_link_libraries(odometry_demo 
-  ${catkin_LIBRARIES}
-)
+# add_executable(radar_odometry 
+#   src/radar_odometry.cpp
+# )
+# target_link_libraries(radar_odometry 
+#   ${catkin_LIBRARIES}
+#   ${PCL_LIBRARIES}
+# )

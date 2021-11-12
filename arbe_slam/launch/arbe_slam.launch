@@ -9,6 +9,8 @@
       <param name="max_segment_doppler_diff" value="0.2" />
       <param name="search_radius_rate" value="20" />
       <param name="static_moving_thre" value="1" />
+      <param name="kf_q" value="1e-6" />
+      <param name="kf_r" value="0.000001" />
     </node>
 
     <node pkg="arbe_slam" type="radar_odometry"    name="radar_odometry"    output="screen">   
@@ -16,8 +18,8 @@
     <param name="child_frame_id" value="/base_link" />
     <param name="max_icp_number" value="20" />
     <param name="uniform_sampleing_radius" value="0.02" />
-    
-    
+    <param name="os_cfar_radius" value="4" />
+
     </node>
 
 </launch>
