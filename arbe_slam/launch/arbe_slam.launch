@@ -9,8 +9,16 @@
       <param name="max_segment_doppler_diff" value="0.2" />
       <param name="search_radius_rate" value="20" />
       <param name="static_moving_thre" value="1" />
-      <param name="kf_q" value="1e-6" />
-      <param name="kf_r" value="0.000001" />
+      <param name="kf_q" value="0.000001" />
+      <param name="kf_r" value="0.00001" />
+      <param name="os_cfar_radius_range" value="2" />
+      <param name="os_cfar_radius_azimuth" value="4" />
+      <param name="min_os_cfar_number" value="33" />
+      <param name="max_os_cfar_number" value="22" />
+      <param name="os_cfar_a" value="2" />
+      <param name="max_elevation_number" value="10" />
+      <param name="max_elevation_range" value="24" />
+
     </node>
 
     <node pkg="arbe_slam" type="radar_odometry"    name="radar_odometry"    output="screen">   
@@ -20,6 +28,9 @@
     <param name="uniform_sampleing_radius" value="0.02" />
     <param name="os_cfar_radius" value="4" />
 
+    </node>
+
+    <node pkg="arbe_slam" type="radar_mapping"    name="radar_mapping"    output="screen">   
     </node>
 
 </launch>

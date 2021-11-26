@@ -56,10 +56,39 @@ target_link_libraries(feature_extract
   ${OpenCV_LIBRARIES}
 )
 
-# add_executable(radar_odometry 
-#   src/radar_odometry.cpp
-# )
-# target_link_libraries(radar_odometry 
-#   ${catkin_LIBRARIES}
-#   ${PCL_LIBRARIES}
-# )
+add_executable(os_cfar 
+  src/os_cfar.cpp
+)
+target_link_libraries(os_cfar  
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+)
+
+add_executable(multipath 
+  src/multipath.cpp
+)
+target_link_libraries(multipath  
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+)
+
+add_executable(radar_odometry 
+  src/radar_odometry.cpp
+)
+target_link_libraries(radar_odometry 
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+)
+
+add_executable(radar_mapping 
+  src/radar_mapping.cpp
+)
+target_link_libraries(radar_mapping 
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+)
+

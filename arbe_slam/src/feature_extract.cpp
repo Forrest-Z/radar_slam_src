@@ -1,5 +1,6 @@
 #include "utility.h"
 
+
 class FeatureExtrace {
 private:
   ros::NodeHandle nh;
@@ -11,6 +12,7 @@ private:
   ros::Publisher arbe_moving_pub;
   ros::Publisher arbe_moving_front_pub;
   ros::Publisher arbe_object_pub;
+  ros::Publisher arbe_object_real_pub;
   ros::Publisher arbe_object_marker_pub;
 
   ros::Publisher arbe_os_cfar_pub;
@@ -29,9 +31,12 @@ private:
   PointCloudA::Ptr arbe_moving_pcl;
   PointCloudA::Ptr arbe_moving_front_pcl;
   PointCloudAO::Ptr arbe_object_pcl;
+  PointCloudAO::Ptr arbe_object_real_pcl;
 
   PointCloudI::Ptr arbe_polar_pcl;
   PointCloudA::Ptr arbe_os_cfar_pcl;
+
+  cv::Mat arbe_project_image;
   sensor_msgs::CompressedImage arbe_project_image_msg;
 
   visualization_msgs::MarkerArray arbe_object_marker_msg;
@@ -73,10 +78,10 @@ private:
 
   visualization_msgs::Marker arbe_object_marker_clear;
 
-  cv::Mat arbe_project_image;
-
   float vehicle_yaw;
 
+  vector<vector<vector<int>>> project_matrix;
+  Eigen::Matrix4f init_rt;
 
 public:
   FeatureExtrace() :nh("~") {
@@ -91,6 +96,7 @@ public:
     arbe_moving_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_moving_topic, 1);
     arbe_moving_front_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_moving_front_topic, 1);
     arbe_object_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_object_topic, 1);
+    arbe_object_real_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_object_real_topic, 1);
     arbe_object_marker_pub = nh.advertise<visualization_msgs::MarkerArray>(arbe_object_marker_topic, 1);
 
     arbe_os_cfar_pub = nh.advertise<sensor_msgs::PointCloud2>(arbe_os_cfar_topic, 1);
@@ -103,7 +109,6 @@ public:
 
     arbe_object_marker_clear.header = cloud_header;
     arbe_object_marker_clear.ns = "arbe_object";
-    // arbe_object_marker.id = label;
     arbe_object_marker_clear.type = visualization_msgs::Marker::CUBE;
     arbe_object_marker_clear.action = visualization_msgs::Marker::DELETEALL;
 
@@ -115,6 +120,15 @@ public:
     nh.getParam("max_segment_doppler_diff", MAX_SEGMENT_DOPPLER_THRE);
     nh.getParam("search_radius_rate", SEARCH_RAIUS_RATE);
     nh.getParam("static_moving_thre", STATIC_MOVING_THRE);
+    nh.getParam("os_cfar_radius", OS_CFAR_RADIUS);
+    nh.getParam("os_cfar_radius_range", OS_CFAR_RADIUS_RANGE);
+    nh.getParam("os_cfar_radius_azimuth", OS_CFAR_RADIUS_AZIMUTH);
+    nh.getParam("min_os_cfar_number", MIN_OS_CFAR_NUMBER);
+    nh.getParam("max_os_cfar_number", MAX_OS_CFAR_NUMBER);
+    nh.getParam("os_cfar_a", OS_CFAR_A);
+    nh.getParam("max_elevation_number", MAX_ELEVATION_NUMBER);
+    nh.getParam("max_elevation_range", MAX_ELEVATION_RANGE);
+
 
     nh.getParam("kf_q", Q);
     nh.getParam("kf_r", R);
@@ -126,13 +140,16 @@ public:
 
     vehicle_yaw = 0;
 
+    Eigen::AngleAxisf rotation(0.1, Eigen::Vector3f::UnitX());
+    Eigen::Translation3f translation(0, 0, 0);
+    init_rt = (translation * rotation).matrix();
+
     allocate_memory();
 
-    if (ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Info))//Debug))
+    if (ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Warn))
     {
       ros::console::notifyLoggerLevelsChanged();
     }
-    cout << "init!" << endl;
   }
 
 
@@ -167,6 +184,7 @@ public:
     arbe_moving_pcl.reset(new PointCloudA());
     arbe_moving_front_pcl.reset(new PointCloudA());
     arbe_object_pcl.reset(new PointCloudAO());
+    arbe_object_real_pcl.reset(new PointCloudAO());
     arbe_os_cfar_pcl.reset(new PointCloudA());
 
     arbe_polar_pcl.reset(new PointCloudI);
@@ -174,8 +192,9 @@ public:
     kdtree_origin.reset(new pcl::KdTreeFLANN<PointA>());
     kdtree_polar.reset(new pcl::KdTreeFLANN<PointI>());
 
-    arbe_project_image = cv::Mat(ROW, COL, CV_8UC3, cv::Vec3b(255, 255, 255));
-
+    arbe_project_image = cv::Mat(ROW, COL * 3, CV_8UC3, cv::Vec3b(255, 255, 255));
+    project_matrix = vector<vector<vector<int>>>(
+      azimuth_number, vector<vector<int>>(elevation_number, vector<int>(range_number, -1)));
   }
 
   void dbw_callback(const arbe_slam::CANROS::ConstPtr& dbw_msg)
@@ -206,11 +225,9 @@ public:
     clock_t start = clock();
     copy_pointcloud(arbe_origin_ros);
 
-    get_polar_pointcloud();
-
-    // os_cfar();
-
     calculate_ego_doppler();
+
+    get_project_image();
 
     segment_pointcloud();
 
@@ -218,15 +235,15 @@ public:
 
     publish_pointcloud();
 
-    ceres_solver_ego_doppler();
+    // ceres_solver_ego_doppler();
 
     reset_memery();
+
     clock_t end = clock();
-
     double duration = (double)(end - start) / CLOCKS_PER_SEC;
-
     ROS_INFO("FeatureExtrace : total duration  %f", duration);
   }
+
 
   void copy_pointcloud(const sensor_msgs::PointCloud2ConstPtr& arbe_origin_ros)
   {
@@ -234,7 +251,9 @@ public:
     cloud_header = arbe_origin_ros->header;
     cloud_header.stamp = ros::Time::now();
     pcl::fromROSMsg(*arbe_origin_ros, *arbe_origin_pcl);
-    kdtree_origin->setInputCloud(arbe_origin_pcl);
+    pcl::transformPointCloud(*arbe_origin_pcl, *arbe_origin_pcl, init_rt);
+
+    // kdtree_origin->setInputCloud(arbe_origin_pcl);
 
     clock_t end = clock();
     double duration = (double)(end - start) / CLOCKS_PER_SEC;
@@ -243,218 +262,37 @@ public:
       arbe_origin_ros->width, duration);
   }
 
-  // void get_polar_pointcloud()
-  // {
-  //   clock_t start = clock();
-  //   for (PointA point_a : arbe_origin_pcl->points)
-  //   {
-  //     PointI point_i;
-  //     point_i.x = point_a.range_bin;
-  //     point_i.y = point_a.azimuth_bin;
-  //     point_i.z = point_a.elevation_bin;
-  //     point_i.intensity = point_a.power_value * point_a.power_value;
-  //     // cout << point_i.intensity;
-  //     arbe_polar_pcl->push_back(point_i);
-  //   }
 
-  //   kdtree_polar->setInputCloud(arbe_polar_pcl);
-
-  //   clock_t end = clock();
-  //   double duration = (double)(end - start) / CLOCKS_PER_SEC;
-
-  //   ROS_INFO("get_polar_pointcloud : duration %f ", duration);
-  // }
-
-  void get_polar_pointcloud()
+  void get_project_image()
   {
     clock_t start = clock();
-    unordered_map<pair<int, int>, int, PairHash>  point_map;
+    // int mat_size[3] = { RANGE_WIDTH,AZIMUTH_WIDTH, ELEVATION_WIDTH };
+    // cv::Mat arbe_polar_mat = cv::Mat(3, mat_size, CV_16UC1, cv::Scalar::all(59999));
 
-    int max_row = 0;
-    int max_col = 0;
+    // int i = 0;
+    // for (PointA point : arbe_origin_pcl->points)
+    // {
+    //   if (point.range_bin < RANGE_WIDTH
+    //     && point.azimuth_bin < AZIMUTH_WIDTH
+    //     && point.elevation_bin < ELEVATION_WIDTH)
+    //   {
+    //     arbe_polar_mat.at<int>(point.range_bin, point.azimuth_bin, point.elevation_bin) = i;
+    //   }
+    //   i += 1;
+    // }
 
-    int max = 0;
-    for (size_t i = 0;i < arbe_origin_pcl->size();i++)
+
+    for (size_t i = 0; i < arbe_origin_pcl->size();i++)
     {
       PointA point = arbe_origin_pcl->points[i];
-
-      arbe_origin_pcl->points[i].power = point.power_value;
-
-      pair<int, int> row_col((int)point.range_bin, (int)point.azimuth_bin);
-      if (row_col.first > max_row)
-      {
-        max_row = row_col.first;
-      }
-      if (row_col.second > max_col)
-      {
-        max_col = row_col.second;
-      }
-
-      if (point_map.find(row_col) == point_map.end())
-      {
-        point_map.emplace(row_col, point.power);
-      }
-      else {
-        point_map[row_col] += point.power;
-      }
-
-      if (point_map[row_col] > max)
-      {
-        max = point_map[row_col];
-      }
-    }
-    for (auto iter : point_map)
-    {
-      PointI point_i;
-      point_i.x = iter.first.first;
-      point_i.y = iter.first.second;
-      point_i.z = 0;
-      point_i.intensity = iter.second;
-      arbe_polar_pcl->push_back(point_i);
-
-      if (iter.first.first > ROW | iter.first.second > COL)
-      {
-        cout << iter.first.first << " " << iter.first.second << "\\";
-      }
-      else {
-        int value = (int)(iter.second * 255 / max);
-        cv::Scalar color = get_project_color(value);
-
-        arbe_project_image.at<cv::Vec3b>(ROW - iter.first.first, iter.first.second)[0]
-          = color[0];
-        arbe_project_image.at<cv::Vec3b>(ROW - iter.first.first, iter.first.second)[1]
-          = color[1];
-        arbe_project_image.at<cv::Vec3b>(ROW - iter.first.first, iter.first.second)[2]
-          = color[2];
-      }
+      project_matrix[(int)point.azimuth_bin][(int)point.elevation_bin][(int)point.range_bin] = i;
     }
 
-    kdtree_polar->setInputCloud(arbe_polar_pcl);
-    point_map.clear();
+
     clock_t end = clock();
     double duration = (double)(end - start) / CLOCKS_PER_SEC;
 
-    ROS_INFO("get_polar_pointcloud : get %d point, duration %f , max_row %d, max_col %d",
-      (int)arbe_polar_pcl->size(), duration, max_row, max_col);
-  }
-
-
-  cv::Scalar get_project_color(int index)
-  {
-    // int index = (dopplor - min_doppler) / dopplor_range * 255;
-    int group_size = 51;
-    int group_num = 5;
-    int group = index / group_size;
-    cv::Scalar ret = cv::Scalar(0, 0, 0);
-    switch (group)
-    {
-    case 0:
-      ret = cv::Scalar(255, 0, 255);
-      ret[0] = (int)(255 - (index % group_size) * group_num);
-      break;
-    case 1:
-      ret = cv::Scalar(0, 0, 255);
-      ret[1] = (int)((index % group_size) * group_num);
-      break;
-    case 2:
-      ret = cv::Scalar(0, 255, 255);
-      ret[2] = (int)(255 - (index % group_size) * group_num);
-      break;
-    case 3:
-      ret = cv::Scalar(0, 255, 0);
-      ret[0] = (int)((index % group_size) * group_num);
-      break;
-    case 4:
-      ret = cv::Scalar(255, 255, 0);
-      ret[1] = (int)((255 - index % group_size) * group_num);
-      break;
-    case 5:
-      ret = cv::Scalar(255, 255, 255);
-      break;
-    default:
-      break;
-    }
-    // cout << dopplor << "\t" << min_doppler << "\t" << dopplor_range << "\t" << index << "\t" << ret << endl;
-    return ret;
-  }
-
-  void os_cfar()
-  {
-    clock_t start = clock();
-    vector<int> os_cfar_target_ind;
-    for (size_t i = 0;i < arbe_polar_pcl->size();i++)
-    {
-      PointI point_center = arbe_polar_pcl->points[i];
-      std::vector<int> point_search_ind;
-      std::vector<float> point_search_sq_dis;
-      int kdtree_search_number = kdtree_polar->radiusSearch(point_center, OS_CFAR_RADIUS,
-        point_search_ind, point_search_sq_dis);
-      // cout << "os" << i << " " << kdtree_search_number << endl;
-
-      // if (kdtree_search_number > MIN_OS_CFAR_NUMBER)
-      // {
-      //   float os_cfar_u = get_kth_thre(point_search_ind, 0, point_search_ind.size() - 1,
-      //     point_search_ind.size() - MIN_OS_CFAR_NUMBER);
-      //   cout << os_cfar_u << " ";
-      //   if (point_center.intensity > os_cfar_u * OS_CFAR_A)
-      //   {
-      //     os_cfar_target_ind.push_back(i);
-      //   }
-      // }
-    }
-
-    if (os_cfar_target_ind.size() > 0)
-    {
-      pcl::copyPointCloud(*arbe_origin_pcl, os_cfar_target_ind, *arbe_os_cfar_pcl);
-    }
-    os_cfar_target_ind.clear();
-    clock_t end = clock();
-    double duration = (double)(end - start) / CLOCKS_PER_SEC;
-
-    ROS_INFO("os_cfar : origin %d points, os_cfar get %d points, duration %f",
-      (int)arbe_origin_pcl->size(), (int)os_cfar_target_ind.size(), duration);
-  }
-
-  float get_kth_thre(std::vector<int>& a, int start_ind, int end_ind, int n)
-  {
-    // cout << start_ind << " " << end_ind << " " << n << endl;
-    int mid_one = a[start_ind];//把第一个值作为支点
-    int i = start_ind, j = end_ind;
-    if (i == j) //递归出口之一
-      return a[i];
-
-    if (i < j) {
-      while (i < j) {
-
-        while (i < j && a[j] >= mid_one) {
-          j--;
-        }
-        if (i < j) {
-          a[i++] = a[j];
-        }
-
-        while (i < j && a[i] < mid_one) {
-          i++;
-        }
-        if (i < j) {
-          a[j--] = a[i];
-        }
-      }
-      a[i] = mid_one;//支点归位
-      //此时a[i]这个数必定处于它真正的位置上，左边的都比他小，右边的都比他大；
-      int th = end_ind - i + 1;//计算下标为i的数第几大，都使用下标进行计算；
-
-      if (th == n) {//正好找到
-        return a[i];
-      }
-      else {
-        if (th > n)//在支点右边找
-          return get_kth_thre(a, i + 1, end_ind, n);
-        else//在支点左边找第(n-th)大,因为右边th个数都比支点大
-          return get_kth_thre(a, start_ind, i - 1, n - th);
-      }
-    }
-    return 0;
+    ROS_INFO("get_project_image :  duration  % f", duration);
   }
 
   float ceres_solver_ego_doppler()
@@ -590,7 +428,7 @@ public:
     moving_index_list.clear();
     for (size_t i = 0; i < arbe_origin_pcl->size();i++)
     {
-      if (abs(relate_doppler_list[i] - ego_doppler) > STATIC_MOVING_THRE)
+      if (abs(relate_doppler_list[i] - ego_doppler) >= STATIC_MOVING_THRE)
       {
         moving_index_list.push_back(i);
         // ROS_INFO("point %d, doppler diff : %f", (int)i, abs(relate_doppler_list[i] - ego_doppler));
@@ -600,6 +438,8 @@ public:
     label_count = 1;
     point_label.clear();
     point_label.resize(arbe_origin_pcl->size(), 0);
+
+    MIN_SEGMENT_NUMBER = 4;
     for (int index : moving_index_list)
     {
       if (point_label[index] == 0)
@@ -610,13 +450,33 @@ public:
       }
     }
 
+    // for (int index = 0; index < arbe_origin_pcl->size();index++)
+    // {
+    //   if (point_label[index] == 0)
+    //   {
+
+    //   }
+    // }
+
+    label_count = 8192;
+    MIN_SEGMENT_NUMBER = 6;
+    for (int index = 0;index < arbe_origin_pcl->size();index++)
+    {
+      if (point_label[index] == 0)
+      {
+        label_pointcloud(index);
+        point_label[index] = 1;
+        ROS_DEBUG("segment_pointcloud : label point %d.", index);
+      }
+    }
+
+
     clock_t end = clock();
     double duration = (double)(end - start) / CLOCKS_PER_SEC;
 
     ROS_INFO("segment_pointcloud : origin moving points : %d, duration %f",
       (int)moving_index_list.size(), duration);
   }
-
   void label_pointcloud(int index) {
 
     vector<int> point_label_tmp;
@@ -638,6 +498,73 @@ public:
       ROS_DEBUG("root index : %d,BFS index %d", index, centrer_index);
       PointA point_center = arbe_origin_pcl->points[centrer_index];
       point_bfs_queue.pop();
+
+      for (vector<int> neighbor : neighbor_iterator)
+      {
+        int azimuth_index = point_center.azimuth_bin + neighbor[0];
+        int elevation_index = point_center.elevation_bin + neighbor[1];
+        int range_index = point_center.range_bin + neighbor[2];
+
+        int search_index = project_matrix[azimuth_index][elevation_index][range_index];
+        if (search_index != -1)
+        {
+          if (point_label[search_index] == 0 && point_label_tmp[search_index] == 0)
+          {
+            PointA point_search = arbe_origin_pcl->points[search_index];
+            float doppler_diff = abs(point_center.doppler - point_search.doppler);
+            if (doppler_diff < MAX_SEGMENT_DOPPLER_THRE)
+            {
+              segmentation_index.push_back(search_index);
+              point_bfs_queue.push(search_index);
+              point_label_tmp[search_index] = 1;
+            }
+          }
+        }
+      }
+    }
+
+    int label = OUTLIER_LABEL;
+
+    if (segmentation_index.size() >= MIN_SEGMENT_NUMBER)
+    {
+      label = label_count;
+      if (!get_object_point(label, segmentation_index))
+      {
+        label_count += 1;
+      }
+    }
+
+    for (int i : segmentation_index)
+    {
+      point_label[i] = label;
+    }
+    ROS_DEBUG("abel_pointcloud : label object %d with %d points.", label, (int)segmentation_index.size());
+
+  }
+
+
+  void label_pointcloud_2(int index) {
+
+    vector<int> point_label_tmp;
+    point_label_tmp.resize(arbe_origin_pcl->size(), 0);
+
+    queue<int> point_bfs_queue;
+    point_bfs_queue.push(index);
+    point_label_tmp[index] = 1;
+
+    vector<int> segmentation_index;
+    segmentation_index.push_back(index);
+
+    std::vector<int> point_search_ind;
+    std::vector<float> point_search_sq_dis;
+
+    while (point_bfs_queue.size() > 0)
+    {
+      int centrer_index = point_bfs_queue.front();
+      ROS_DEBUG("root index : %d,BFS index %d", index, centrer_index);
+      PointA point_center = arbe_origin_pcl->points[centrer_index];
+      point_bfs_queue.pop();
+
       float search_radius = point_center.range / SEARCH_RAIUS_RATE;
       if (search_radius < range_res * 1.5)
       {
@@ -795,7 +722,7 @@ public:
     // }
 
     PointAO arbe_object = calculate_arbe_object(x_list, y_list, z_list, doppler_list, power_list, label);
-    cout << arbe_object.x << "\t" << arbe_object.y << "\t" << arbe_object.z << endl;
+    // cout << arbe_object.x << "\t" << arbe_object.y << "\t" << arbe_object.z << endl;
 
     int merge_result = merge_arbe_object(arbe_object);
     if (merge_result == -1)
@@ -963,8 +890,8 @@ public:
     feature_extractor.getMassCenter(mass_center);
     ROS_INFO("get_odd");
 
-    cout << position_OBB.x << "\t" << position_OBB.y << "\t" << position_OBB.z << endl;
-    cout << major_value << "\t" << middle_value << "\t" << minor_value << endl;
+    // cout << position_OBB.x << "\t" << position_OBB.y << "\t" << position_OBB.z << endl;
+    // cout << major_value << "\t" << middle_value << "\t" << minor_value << endl;
   }
 
   // void get_obb(PointCloudA::Ptr single_object_pcl)
@@ -1035,6 +962,14 @@ public:
     arbe_object_ros.header = cloud_header;
     arbe_object_pub.publish(arbe_object_ros);
 
+    sensor_msgs::PointCloud2 arbe_object_real_ros;
+    pcl::toROSMsg(*arbe_object_real_pcl, arbe_object_real_ros);
+    arbe_object_real_ros.header = cloud_header;
+    arbe_object_real_pub.publish(arbe_object_real_ros);
+
+
+    arbe_object_marker_pub.publish(arbe_object_marker_msg);
+
     sensor_msgs::PointCloud2 arbe_os_cfar_ros;
     pcl::toROSMsg(*arbe_os_cfar_pcl, arbe_os_cfar_ros);
     arbe_os_cfar_ros.header = cloud_header;
@@ -1050,6 +985,8 @@ public:
     float duration = (double)(end - start) / CLOCKS_PER_SEC;
 
     ROS_INFO("publish_pointcloud : duration %f", duration);
+
+    // save_pcl(arbe_origin_pcl);
   }
 
   void reset_memery()
@@ -1057,6 +994,7 @@ public:
     arbe_object_marker_msg.markers.clear();
     arbe_object_marker_msg.markers.push_back(arbe_object_marker_clear);
     arbe_object_pcl->clear();
+    arbe_object_real_pcl->clear();
     arbe_segment_pcl->clear();
     arbe_outlier_pcl->clear();
     arbe_moving_pcl->clear();
@@ -1064,8 +1002,11 @@ public:
     arbe_moving_front_pcl->clear();
     arbe_static_front_pcl->clear();
     arbe_polar_pcl->clear();
+    arbe_os_cfar_pcl->clear();
 
-    arbe_project_image = cv::Mat(ROW, COL, CV_8UC3, cv::Vec3b(255, 255, 255));
+    arbe_project_image = cv::Mat(ROW, COL * 3, CV_8UC3, cv::Vec3b(255, 255, 255));
+    project_matrix = vector<vector<vector<int>>>(
+      azimuth_number, vector<vector<int>>(elevation_number, vector<int>(range_number, -1)));
 
   }
 
@@ -1142,7 +1083,7 @@ public:
       {
         arbe_outlier_pcl->push_back(arbe_origin_pcl->points[i]);
       }
-      else if (label != 0)
+      else if (label > 0 and label < 8192)
       {
         arbe_moving_pcl->push_back(arbe_origin_pcl->points[i]);
         arbe_moving_pcl->back().power_value = label;
@@ -1156,9 +1097,42 @@ public:
     }
 
     project_pointcloud(arbe_static_pcl, arbe_static_front_pcl);
+
+    get_object_real();
+
     get_arbe_object_marker();
   }
+
+  void get_object_real()
+  {
+    PointCloudAO::Ptr arbe_object_trans_pcl(new PointCloudAO());
+
+    pcl::transformPointCloud(*arbe_object_pcl, *arbe_object_trans_pcl, init_rt);
+    for (int i = 0; i < arbe_object_pcl->size();i++)
+    {
+      // cout << arbe_object_pcl->points[i].z << " " << arbe_object_trans_pcl->points[i].z << endl;
+      if (arbe_object_trans_pcl->points[i].z - arbe_object_pcl->points[i].high / 2 < (-Z_BIAS + Z_THRE) |
+        arbe_object_trans_pcl->points[i].z + arbe_object_pcl->points[i].high / 2 > (-Z_BIAS - Z_THRE))
+      {
+        arbe_object_real_pcl->push_back(arbe_object_pcl->points[i]);
+        // cout << "true" << endl;
+      }
+    }
+  }
+
+  void save_pcl(PointCloudA::Ptr target_pcl)
+  {
+    ostringstream oss1;
+    oss1 << cloud_header.stamp.sec;
+    ostringstream oss2;
+    oss2 << cloud_header.stamp.nsec;
+    string file_name("/home/qinguoyu/radar_slam/" + oss1.str() + "_" + oss2.str() + ".pcd");
+    cout << file_name << endl;
+    pcl::io::savePCDFileBinary(file_name, *target_pcl);
+  }
 };
+
+
 
 int main(int argc, char** argv)
 {

@@ -6,6 +6,7 @@
 #include <pcl/filters/uniform_sampling.h>
 #include <pcl/common/common.h>
 #include <pcl/pcl_macros.h>
+#include <pcl/io/pcd_io.h>
 #include <pcl/features/moment_of_inertia_estimation.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <sensor_msgs/CompressedImage.h>
@@ -26,12 +27,15 @@
 #include <string>
 #include <vector>
 #include <queue>
+#include <deque>
 #include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
+#include <mutex>
 
 #include "ceres_factor.hpp"
 #include "arbe_slam/CANROS.h"
+
 
 using namespace std;
 
@@ -126,6 +130,27 @@ typedef pcl::PointCloud<PointT> PointCloudT;
 typedef pcl::PointXYZI PointI;
 typedef pcl::PointCloud<PointI> PointCloudI;
 
+
+struct PointQT
+{
+  PCL_ADD_POINT4D;
+  PCL_ADD_INTENSITY;
+  float qx;
+  float qy;
+  float qz;
+  float qw;
+  double time;
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+} EIGEN_ALIGN16;
+
+POINT_CLOUD_REGISTER_POINT_STRUCT(PointQT,
+  (float, x, x) (float, y, y)
+  (float, z, z) (float, intensity, intensity)
+  (float, qx, qx) (float, qy, qy) (float, qz, qz)(float, qw, qw)
+  (double, time, time)
+)
+typedef pcl::PointCloud<PointQT> PointCloudQT;
+
 struct Vector2iHash {
   size_t operator()(const vector<int>& v) const {
     std::hash<int> hasher;
@@ -169,6 +194,15 @@ typedef struct
   int8_t torque;
 }SteeringReport;
 
+typedef struct
+{
+  int max_power;
+  vector<int> index;
+  int max_index;
+  int min_index;
+
+}ProjectInfo;
+
 
 string arbe_origin_topic = "/arbe/rviz/pointcloud";
 string arbe_project_topic = "/arbe/feature/project";
@@ -178,6 +212,7 @@ string arbe_static_front_topic = "/arbe/feature/static_front";
 string arbe_moving_topic = "/arbe/feature/moving";
 string arbe_moving_front_topic = "/arbe/feature/moving_front";
 string arbe_object_topic = "/arbe/feature/object";
+string arbe_object_real_topic = "/arbe/feature/object_real";
 string arbe_object_marker_topic = "/arbe/feature/object_marker";
 
 string arbe_os_cfar_topic = "/arbe/feature/os_cfar";
@@ -193,8 +228,15 @@ string arbe_ego_doppler_y_topic = "/arbe/feature/ego_doppler_y";
 string arbe_radar_odometry_topic = "/arbe/odometry/radar_odometry";
 string arbe_radar_path_topic = "/arbe/odometry/radar_path";
 string arbe_feature_xyz_us_old_icp_topic = "/arbe/odometry/feature_xyz_us_old_icp";
+string arbe_after_odometry_topic = "/arbe/odometry/arbe_after_odometry";
 string icp_score_topic = "/arbe/odometry/icp_score";
 
+
+
+string arbe_mapping_odometry_topic = "/arbe/mapping/radar_odometry";
+string arbe_mapping_path_topic = "/arbe/mapping/radar_path";
+string arbe_mapping_topic = "/arbe/mapping/mapping";
+string arbe_after_mappling_topic = "/arbe/mapping/after_mapping";
 
 string frame_id = "image_radar";
 
@@ -206,12 +248,16 @@ float azimuth_bias = 1.0014;
 float elevation_res = -0.0212;
 float elevation_bias = 0.339;
 //-16.017821758490438 -1.2133574193589876 19.435342872634198
-float power_res = 0.125;
-float power_bias = 116.06;
+float power_res = 0.;
+float power_bias = 116.0;
+
+int RANGE_WIDTH = 512;
+int AZIMUTH_WIDTH = 128;
+int ELEVATION_WIDTH = 32;
 
 float MAX_SEGMENT_DISTANCE = 0.7;
 float MIN_SEGMENT_DISTANCE = 0.2;
-float MIN_SEGMENT_NUMBER = 3;
+float MIN_SEGMENT_NUMBER = 4;
 float MAX_SEGMENT_DOPPLER_THRE = 0.2;
 int SEARCH_RAIUS_RATE = 30;
 float STATIC_MOVING_THRE = 0.3;
@@ -224,9 +270,28 @@ int OUTLIER_LABEL = 99999;
 
 float MIN_CALCULATE_EGO_DOPPLER_RADIUS = 20;
 
+
 int range_number = 640;
 int azimuth_number = 128;
 int elevation_number = 32;
+
+vector<vector<int>> neighbor_iterator_static =
+{ {-1,0,0},{1,0,0},
+{0,-1,0},{0,1,0},
+{0,0,-1},{0,0,1} ,
+{0,0,-2},{0,0,2},
+{0,0,-3},{0,0,3},
+{0,0,-4},{0,0,4} };
+
+vector<vector<int>> neighbor_iterator_moving =
+{ {-1,0,0},{1,0,0},
+{0,-1,0},{0,1,0},
+{0,0,-1},{0,0,1} };
+
+vector<vector<int>> neighbor_iterator =
+{ {-1,0,0},{1,0,0},
+{0,-1,0},{0,1,0},
+{0,0,-1},{0,0,1} };
 
 double motion_estimate[2] = { 0,0 };
 
@@ -236,9 +301,24 @@ int MAX_ICP_NUMBER = 20;
 float UNIFORM_SAMPLEING_RADIUS = 0.01;
 
 
-int OS_CFAR_RADIUS = 2;
-int MIN_OS_CFAR_NUMBER = 16; // total 297
-float OS_CFAR_A = 5.8;
-
+int OS_CFAR_RADIUS = 4;
+int OS_CFAR_RADIUS_RANGE = 8;
+int OS_CFAR_RADIUS_AZIMUTH = 4;
+int MIN_OS_CFAR_NUMBER = 11;
+int MAX_OS_CFAR_NUMBER = 22;
+float OS_CFAR_A = 2;
+int MAX_ELEVATION_NUMBER = 10;
+int MAX_ELEVATION_RANGE = 24;
 int ROW = 512;
 int COL = 128;
+
+
+int PITCH_BIAS = 0.1;
+int Z_BIAS = 1.5;
+int Z_THRE = 1;
+
+
+//mapping
+float KEY_POSE_SEARCH_RADIUS = 50.0;
+float  KEY_POSE_US_RADIUS = 0.01;
+float  SUB_MAP_US_RADIUS = 0.01;

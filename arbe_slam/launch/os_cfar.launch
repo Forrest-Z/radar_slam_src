@@ -1,0 +1,23 @@
+<launch>
+    
+    <param name="robot_description" textfile="$(find arbe_slam)/config/radar_kit.urdf"/>  
+
+    <node pkg="arbe_slam" type="os_cfar"    name="os_cfar"    output="screen">
+      <param name="os_cfar_radius_range" value="1" />
+      <param name="os_cfar_radius_azimuth" value="4" />
+      <param name="min_os_cfar_number" value="32" />
+      <param name="max_os_cfar_number" value="66" />
+      <param name="os_cfar_a" value="6" />
+      <param name="max_elevation_number" value="10" />
+      <param name="max_elevation_range" value="24" />
+
+      <param name="max_shang" value="30000" />
+      <param name="min_shang" value="20000" />
+      <param name="range_group_width" value="40" />
+      <param name="doppler_group_width" value="5" />
+      <param name="elevation_group_width" value="1" />
+
+
+    </node>
+
+</launch>
