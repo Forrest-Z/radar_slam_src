@@ -1,7 +1,5 @@
 <launch>
     
-    <param name="robot_description" textfile="$(find arbe_slam)/config/radar_kit.urdf"/>  
-
     <node pkg="arbe_slam" type="feature_extract"    name="feature_extract"    output="screen">
       <param name="max_segment_distance" value="1.0" />
       <param name="min_segment_distance" value="0.2" />
@@ -21,16 +19,18 @@
 
     </node>
 
-    <node pkg="arbe_slam" type="radar_odometry"    name="radar_odometry"    output="screen">   
+    <!-- <node pkg="arbe_slam" type="radar_odometry"    name="radar_odometry"    output="screen">   
     <param name="frame_id" value="/odometry" />
     <param name="child_frame_id" value="/base_link" />
     <param name="max_icp_number" value="20" />
     <param name="uniform_sampleing_radius" value="0.02" />
     <param name="os_cfar_radius" value="4" />
+    </node> -->
 
-    </node>
+    <!-- <node pkg="arbe_slam" type="radar_mapping"    name="radar_mapping"    output="screen">   
+    </node> -->
 
-    <node pkg="arbe_slam" type="radar_mapping"    name="radar_mapping"    output="screen">   
-    </node>
+    <!-- <node pkg="arbe_slam" type="radar_tracing"    name="radar_tracing"    output="screen">   
+    </node> -->
 
 </launch>

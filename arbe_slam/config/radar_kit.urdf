@@ -18,7 +18,7 @@
   <joint name="joint_base_wheel1" type="fixed">  
     <parent link="base_link"/>  
     <child link="image_radar"/>  
-    <origin rpy="0.1 0 0" xyz="0 1.5 0"/> 
+    <origin rpy="0.1 0 0" xyz="0 0.5 0"/> 
   </joint>  
   
   <joint name="joint_base_wheel2" type="fixed">  

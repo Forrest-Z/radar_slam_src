@@ -83,12 +83,30 @@ target_link_libraries(radar_odometry
   ${OpenCV_LIBRARIES}
 )
 
-add_executable(radar_mapping 
-  src/radar_mapping.cpp
+# add_executable(radar_mapping 
+#   src/radar_mapping.cpp
+# )
+# target_link_libraries(radar_mapping 
+#   ${catkin_LIBRARIES}
+#   ${PCL_LIBRARIES}
+#   ${OpenCV_LIBRARIES}
+# )
+
+add_executable(radar_tracing 
+  src/radar_tracing.cpp
+  src/ekf.cpp
 )
-target_link_libraries(radar_mapping 
+target_link_libraries(radar_tracing 
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
   ${OpenCV_LIBRARIES}
 )
 
+add_executable(ekf 
+  src/ekf_test.cpp
+  src/ekf.cpp
+)
+target_link_libraries(ekf 
+  ${catkin_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+)

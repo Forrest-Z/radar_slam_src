@@ -28,6 +28,7 @@ private:
 
   std_msgs::Header cloud_header;
 
+
   bool init;
 
   // string frame_if;
@@ -69,7 +70,7 @@ public:
     nh.getParam("max_icp_number", MAX_ICP_NUMBER);
     nh.getParam("uniform_sampleing_radius", UNIFORM_SAMPLEING_RADIUS);
 
-    icp.setMaxCorrespondenceDistance(3);
+    icp.setMaxCorrespondenceDistance(1.5);
     icp.setMaximumIterations(100);
     icp.setTransformationEpsilon(1e-6);
     icp.setEuclideanFitnessEpsilon(1e-6);
@@ -88,7 +89,6 @@ public:
     q_odo_base = Eigen::Quaterniond(1, 0, 0, 0);
     t_odo_base = Eigen::Vector3d(0, 0, 0);
 
-    radar_path.header.stamp = cloud_header.stamp;
     radar_path.header.frame_id = "base_link";
 
     qt_odo_base = Eigen::Matrix4f::Identity();
@@ -100,7 +100,7 @@ public:
     {
       ros::console::notifyLoggerLevelsChanged();
     }
-    cout << "RadarOdometry init!" << endl;
+    ROS_INFO("RadarOdometry init!");
 
   }
 
@@ -148,10 +148,10 @@ public:
 
   void uniform_sample_pointcloud()
   {
-    for (size_t i = 0;i < arbe_feature_xyz_pcl->size();i++)
-    {
-      arbe_feature_xyz_pcl->points[i].z = 0;
-    }
+    // for (size_t i = 0;i < arbe_feature_xyz_pcl->size();i++)
+    // {
+    //   arbe_feature_xyz_pcl->points[i].z = 0;
+    // }
 
     US.setInputCloud(arbe_feature_xyz_pcl);
     US.filter(*arbe_feature_xyz_us_pcl);
@@ -194,18 +194,27 @@ public:
       // t_last_odo = qt_last_odo.topRightCorner(3, 1); 数据转换问题
       t_odo_last.x() = qt_odo_last(0, 3);
       t_odo_last.y() = qt_odo_last(1, 3);
-      t_odo_last.z() = qt_odo_last(2, 3);
+      // t_odo_last.z() = qt_odo_last(2, 3);
+
       e_odo_last = qt_odo_last.block<3, 3>(0, 0).eulerAngles(2, 1, 0);
 
-      Eigen::AngleAxisd rollAngle(e_odo_last(2), Eigen::Vector3d::UnitX());
-      Eigen::AngleAxisd pitchAngle(e_odo_last(1), Eigen::Vector3d::UnitY());
-      Eigen::AngleAxisd yawAngle(e_odo_last(0), Eigen::Vector3d::UnitZ());
+      // Eigen::Vector3f e_odo_last_tmp = qt_odo_last.block<3, 3>(0, 0).eulerAngles(2, 1, 0);
+      // e_odo_last = Eigen::Vector3f(0, 0, 0);
+      // cout << e_odo_last_tmp.x() << endl;
+      // e_odo_last.x() = e_odo_last_tmp.x();
+      e_odo_last = qt_odo_last.block<3, 3>(0, 0).eulerAngles(2, 1, 0);
+
+      Eigen::AngleAxisd rollAngle(e_odo_last.z(), Eigen::Vector3d::UnitX());
+      Eigen::AngleAxisd pitchAngle(e_odo_last.y(), Eigen::Vector3d::UnitY());
+      Eigen::AngleAxisd yawAngle(e_odo_last.x(), Eigen::Vector3d::UnitZ());
       q_odo_last = yawAngle * pitchAngle * rollAngle;
+      // q_odo_last = Eigen::Quaterniond(1, 0, 0, 0);
+      // q_odo_last = Eigen::Quaterniond(yawAngle);
 
-      ROS_INFO("calculate_icp :yaw %f x %f y %f", e_odo_last(0), t_odo_last.x(), t_odo_last.y());
+      ROS_INFO("calculate_icp :yaw %f x %f y %f", e_odo_last.x(), t_odo_last.x(), t_odo_last.y());
 
-      cout << e_odo_last << endl;
-      cout << t_odo_last << endl;
+      // cout << e_odo_last << endl;
+      // cout << t_odo_last << endl;
 
       t_odo_base = t_odo_base + q_odo_base * t_odo_last;
       q_odo_base = q_odo_base * q_odo_last;
@@ -233,41 +242,40 @@ public:
     header.stamp = cloud_header.stamp;
     header.frame_id = "base_link";
 
-    nav_msgs::Odometry radar_odometry;
-    radar_odometry.header = header;
-    radar_odometry.child_frame_id = "odometry";
-    radar_odometry.pose.pose.orientation.x = q_odo_base.x();
-    radar_odometry.pose.pose.orientation.y = q_odo_base.y();
-    radar_odometry.pose.pose.orientation.z = q_odo_base.z();
-    radar_odometry.pose.pose.orientation.w = q_odo_base.w();
-    radar_odometry.pose.pose.position.x = t_odo_base.x();
-    radar_odometry.pose.pose.position.y = t_odo_base.y();
-    radar_odometry.pose.pose.position.z = t_odo_base.z();
+    nav_msgs::Odometry radar_odometry_ros;
+    radar_odometry_ros.header = header;
+    radar_odometry_ros.child_frame_id = "odometry";
+    radar_odometry_ros.pose.pose.orientation.x = q_odo_base.x();
+    radar_odometry_ros.pose.pose.orientation.y = q_odo_base.y();
+    radar_odometry_ros.pose.pose.orientation.z = q_odo_base.z();
+    radar_odometry_ros.pose.pose.orientation.w = q_odo_base.w();
+    radar_odometry_ros.pose.pose.position.x = t_odo_base.x();
+    radar_odometry_ros.pose.pose.position.y = t_odo_base.y();
+    radar_odometry_ros.pose.pose.position.z = t_odo_base.z();
     // radar_odometry.twist.twist.angular.x = roll;
     // radar_odometry.twist.twist.angular.y = pitch;
     // radar_odometry.twist.twist.angular.z = yaw;
     // radar_odometry.twist.twist.linear.x = w_curr_t.x();
     // radar_odometry.twist.twist.linear.y = w_curr_t.y();
     // radar_odometry.twist.twist.linear.z = w_curr_t.z();
-    arbe_radar_odometry_pub.publish(radar_odometry);
+    arbe_radar_odometry_pub.publish(radar_odometry_ros);
 
     // path
-    geometry_msgs::PoseStamped radar_pose;
-    radar_pose.header = header;
-    radar_pose.pose = radar_odometry.pose.pose;
-
-    radar_path.poses.push_back(radar_pose);
+    geometry_msgs::PoseStamped radar_pose_ros;
+    radar_pose_ros.header = header;
+    radar_pose_ros.pose = radar_odometry_ros.pose.pose;
+    radar_path.poses.push_back(radar_pose_ros);
     arbe_radar_path_pub.publish(radar_path);
 
     // tf
-    geometry_msgs::TransformStamped odom_trans;
-    odom_trans.header = header;
-    odom_trans.child_frame_id = "odometry";
-    odom_trans.transform.translation.x = t_odo_base.x();
-    odom_trans.transform.translation.y = t_odo_base.y();
-    odom_trans.transform.translation.z = t_odo_base.z();
-    odom_trans.transform.rotation = radar_odometry.pose.pose.orientation;
-    odom_broadcaster.sendTransform(odom_trans);
+    geometry_msgs::TransformStamped odom_trans_ros;
+    odom_trans_ros.header = header;
+    odom_trans_ros.child_frame_id = "odometry";
+    odom_trans_ros.transform.translation.x = t_odo_base.x();
+    odom_trans_ros.transform.translation.y = t_odo_base.y();
+    odom_trans_ros.transform.translation.z = t_odo_base.z();
+    odom_trans_ros.transform.rotation = radar_odometry_ros.pose.pose.orientation;
+    odom_broadcaster.sendTransform(odom_trans_ros);
   }
 
   void publish_pointcloud_icp()

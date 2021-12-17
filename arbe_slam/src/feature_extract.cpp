@@ -59,14 +59,13 @@ private:
   //ego doppler KF
   double Q;
 
-  double ego_doppler_old;
-  double ego_doppler_new;
+  double ego_doppler_static;
   double ego_doppler_pre;
   double ego_doppler_est;
 
   double P_old;
   double P_pre;
-  double P_new;
+  double P_est;
 
   double K;
   double R;
@@ -81,7 +80,7 @@ private:
   float vehicle_yaw;
 
   vector<vector<vector<int>>> project_matrix;
-  Eigen::Matrix4f init_rt;
+  Eigen::Matrix4d init_rt;
 
 public:
   FeatureExtrace() :nh("~") {
@@ -140,13 +139,19 @@ public:
 
     vehicle_yaw = 0;
 
-    Eigen::AngleAxisf rotation(0.1, Eigen::Vector3f::UnitX());
-    Eigen::Translation3f translation(0, 0, 0);
+    Eigen::AngleAxisd rotation(0.1, Eigen::Vector3d::UnitX());
+    Eigen::Translation3d translation(0, 1.5, 0);
     init_rt = (translation * rotation).matrix();
+
+    // Eigen::Isometry3d rt;
+    // rt.rotate(Eigen::AngleAxisd(0.1, Eigen::Vector3d::UnitX()));
+    // rt.pretranslate(Eigen::Vector3d(0, 10, 0));
+    // init_rt = rt.matrix();
+
 
     allocate_memory();
 
-    if (ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Warn))
+    if (ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Info))
     {
       ros::console::notifyLoggerLevelsChanged();
     }
@@ -157,14 +162,11 @@ public:
   {
     Q = 1e-6;
 
-    ego_doppler_old = 0;
-    ego_doppler_new = 0;
     ego_doppler_pre = 0;
     ego_doppler_est = 0;
 
-    P_old = 1;
     P_pre = 0;
-    P_new = 0;
+    P_est = 0;
 
     K = 0;
     R = 0.1 * 0.1;
@@ -249,9 +251,10 @@ public:
   {
     clock_t start = clock();
     cloud_header = arbe_origin_ros->header;
+    // cloud_header.frame_id = "base_link";
     cloud_header.stamp = ros::Time::now();
     pcl::fromROSMsg(*arbe_origin_ros, *arbe_origin_pcl);
-    pcl::transformPointCloud(*arbe_origin_pcl, *arbe_origin_pcl, init_rt);
+    // pcl::transformPointCloud(*arbe_origin_pcl, *arbe_origin_pcl, init_rt);
 
     // kdtree_origin->setInputCloud(arbe_origin_pcl);
 
@@ -375,22 +378,13 @@ public:
       }
     }
 
-    float ego_doppler_static = (float)ego_doppler_ten / 10.;
+    ego_doppler_static = (float)ego_doppler_ten / 10.;
 
     std_msgs::Float64 ego_doppler_msg;
-    ego_doppler_msg.data = ego_doppler_static;
+    ego_doppler_msg.data = ego_doppler;
     arbe_ego_doppler_pub.publish(ego_doppler_msg);
 
-    if (ego_doppler_init_flag)
-    {
-      ego_doppler_new = ego_doppler_static;
-      ego_doppler_kf();
-    }
-    else
-    {
-      ego_doppler = ego_doppler_old = ego_doppler_static;
-      ego_doppler_init_flag = true;
-    }
+    ego_doppler_kf();
 
     doppler_counter.clear();
 
@@ -403,17 +397,23 @@ public:
 
   void ego_doppler_kf()
   {
-    ego_doppler_pre = A * ego_doppler_old;
-    P_pre = A * P_old + Q;
+    if (ego_doppler_init_flag)
+    {
+      ego_doppler_pre = ego_doppler_est;
+      P_pre = P_est + Q;
 
-    K = P_pre / (P_pre + R);
-    ego_doppler_est = ego_doppler_pre + K * (ego_doppler_new - H * ego_doppler_pre);
-    P_new = (1 - K * H) * P_pre;
+      K = P_pre / (P_pre + R);
+      ego_doppler_est = ego_doppler_pre + K * (ego_doppler_static - ego_doppler_pre);
+      P_est = (1 - K) * P_pre;
+    }
 
-    P_old = P_new;
-    ego_doppler_old = ego_doppler_est;
+    else
+    {
+      ego_doppler_est = ego_doppler_static;
+      ego_doppler_init_flag = true;
+    }
+
     ego_doppler = ego_doppler_est;
-
     std_msgs::Float64 ego_doppler_kf_msg;
     ego_doppler_kf_msg.data = ego_doppler;
     arbe_ego_doppler_kf_pub.publish(ego_doppler_kf_msg);
@@ -431,7 +431,7 @@ public:
       if (abs(relate_doppler_list[i] - ego_doppler) >= STATIC_MOVING_THRE)
       {
         moving_index_list.push_back(i);
-        // ROS_INFO("point %d, doppler diff : %f", (int)i, abs(relate_doppler_list[i] - ego_doppler));
+        ROS_INFO("point %d, doppler diff : %f", (int)i, abs(relate_doppler_list[i] - ego_doppler));
       }
     }
 
@@ -445,30 +445,21 @@ public:
       if (point_label[index] == 0)
       {
         label_pointcloud(index);
-        point_label[index] = 1;
         ROS_DEBUG("segment_pointcloud : label point %d.", index);
       }
     }
 
-    // for (int index = 0; index < arbe_origin_pcl->size();index++)
+    // label_count = 8192;
+    // MIN_SEGMENT_NUMBER = 6;
+    // for (int index = 0;index < arbe_origin_pcl->size();index++)
     // {
     //   if (point_label[index] == 0)
     //   {
-
+    //     label_pointcloud(index);
+    //     point_label[index] = 1;
+    //     ROS_DEBUG("segment_pointcloud : label point %d.", index);
     //   }
     // }
-
-    label_count = 8192;
-    MIN_SEGMENT_NUMBER = 6;
-    for (int index = 0;index < arbe_origin_pcl->size();index++)
-    {
-      if (point_label[index] == 0)
-      {
-        label_pointcloud(index);
-        point_label[index] = 1;
-        ROS_DEBUG("segment_pointcloud : label point %d.", index);
-      }
-    }
 
 
     clock_t end = clock();
@@ -477,6 +468,8 @@ public:
     ROS_INFO("segment_pointcloud : origin moving points : %d, duration %f",
       (int)moving_index_list.size(), duration);
   }
+
+
   void label_pointcloud(int index) {
 
     vector<int> point_label_tmp;
@@ -614,79 +607,13 @@ public:
     ROS_DEBUG("abel_pointcloud : label object %d with %d points.", label, (int)segmentation_index.size());
   }
 
-  // bool get_object_point(int label, vector<int>& segmentation_index)
-  // {
-  //   PointCloudA::Ptr single_object_pcl(new PointCloudA());
-  //   vector<float> x_list;
-  //   vector<float> y_list;
-  //   vector<float> z_list;
-  //   vector<float> doppler_list;
-  //   vector<float> power_list;
-
-  //   int final_label = label;
-  //   bool merge_flag = false;
-
-  //   for (int i : segmentation_index)
-  //   {
-  //     single_object_pcl->push_back(arbe_origin_pcl->points[i]);
-  //     PointA point = arbe_origin_pcl->points[i];
-  //     x_list.push_back(point.x);
-  //     y_list.push_back(point.y);
-  //     z_list.push_back(point.z);
-  //     doppler_list.push_back(point.doppler);
-  //     power_list.push_back(point.power);
-  //   }
-
-  //   int arbe_moving_front_pcl_start = arbe_moving_front_pcl->size();
-  //   project_pointcloud(single_object_pcl, arbe_moving_front_pcl);
-  //   int arbe_moving_front_pcl_end = arbe_moving_front_pcl->size();
-
-  //   // for (size_t i = arbe_moving_front_pcl_start; i < arbe_moving_front_pcl_end;i++)
-  //   // {
-  //   //   PointA point = arbe_moving_front_pcl->points[i];
-  //   //   x_list.push_back(point.x);
-  //   //   y_list.push_back(point.y);
-  //   //   z_list.push_back(point.z);
-  //   //   doppler_list.push_back(point.doppler);
-  //   //   power_list.push_back(point.power);
-  //   // }
-
-  //   PointAO arbe_object = calculate_arbe_object(x_list, y_list, z_list, doppler_list, power_list, label);
-
-
-  //   int merge_result = merge_arbe_object(arbe_object);
-  //   if (merge_result == -1)
-  //   {
-  //     arbe_object_pcl->push_back(arbe_object);
-  //   }
-  //   else
-  //   {
-  //     final_label = merge_result;
-  //     merge_flag = true;
-  //   }
-
-  //   ROS_DEBUG("object %d -> %d : pointcloud number : %d,  pointcloud front number : %d!", label, final_label,
-  //     (int)single_object_pcl->size(), arbe_moving_front_pcl_end - arbe_moving_front_pcl_start);
-
-  //   for (int i = arbe_moving_front_pcl_start;i < arbe_moving_front_pcl_end;i++)
-  //   {
-  //     arbe_moving_front_pcl->points[i].power_value = final_label;
-  //   }
-
-  //   for (PointA point : single_object_pcl->points)
-  //   {
-  //     point.power_value = final_label;
-  //     arbe_moving_pcl->push_back(point);
-  //   }
-  //   return merge_flag;
-  // }
-
   bool get_object_point(int label, vector<int>& segmentation_index)
   {
     PointCloudA::Ptr single_object_pcl(new PointCloudA());
     vector<float> x_list;
     vector<float> y_list;
     vector<float> z_list;
+    vector<float> range_list;
     vector<float> doppler_list;
     vector<float> power_list;
 
@@ -700,6 +627,7 @@ public:
       x_list.push_back(point.x);
       y_list.push_back(point.y);
       z_list.push_back(point.z);
+      range_list.push_back(point.range);
       doppler_list.push_back(point.doppler);
       power_list.push_back(point.power);
     }
@@ -707,9 +635,9 @@ public:
     // get_obb(single_object_pcl);
 
 
-    int arbe_moving_front_pcl_start = arbe_moving_front_pcl->size();
-    project_pointcloud(single_object_pcl, arbe_moving_front_pcl);
-    int arbe_moving_front_pcl_end = arbe_moving_front_pcl->size();
+    // int arbe_moving_front_pcl_start = arbe_moving_front_pcl->size();
+    // project_pointcloud(single_object_pcl, arbe_moving_front_pcl);
+    // int arbe_moving_front_pcl_end = arbe_moving_front_pcl->size();
 
     // for (size_t i = arbe_moving_front_pcl_start; i < arbe_moving_front_pcl_end;i++)
     // {
@@ -721,7 +649,7 @@ public:
     //   power_list.push_back(point.power);
     // }
 
-    PointAO arbe_object = calculate_arbe_object(x_list, y_list, z_list, doppler_list, power_list, label);
+    PointAO arbe_object = get_arbe_object(x_list, y_list, z_list, range_list, doppler_list, power_list, label);
     // cout << arbe_object.x << "\t" << arbe_object.y << "\t" << arbe_object.z << endl;
 
     int merge_result = merge_arbe_object(arbe_object);
@@ -735,25 +663,25 @@ public:
       merge_flag = true;
     }
 
-    ROS_DEBUG("object %d -> %d : pointcloud number : %d,  pointcloud front number : %d!", label, final_label,
-      (int)single_object_pcl->size(), arbe_moving_front_pcl_end - arbe_moving_front_pcl_start);
+    ROS_DEBUG("object %d -> %d : pointcloud number : %d", label, final_label,
+      (int)single_object_pcl->size());
 
-    for (int i = arbe_moving_front_pcl_start;i < arbe_moving_front_pcl_end;i++)
-    {
-      arbe_moving_front_pcl->points[i].power_value = final_label;
-    }
+    // for (int i = arbe_moving_front_pcl_start;i < arbe_moving_front_pcl_end;i++)
+    // {
+    //   arbe_moving_front_pcl->points[i].power_value = final_label;
+    // }
 
-    for (PointA point : single_object_pcl->points)
-    {
-      point.power_value = final_label;
-      arbe_moving_pcl->push_back(point);
-    }
+    // for (PointA point : single_object_pcl->points)
+    // {
+    //   point.power_value = final_label;
+    //   arbe_moving_pcl->push_back(point);
+    // }
     return merge_flag;
   }
 
 
-  PointAO calculate_arbe_object(vector<float> x_list, vector<float> y_list, vector<float> z_list,
-    vector<float> doppler_list, vector<float> power_list, int label)
+  PointAO get_arbe_object(vector<float> x_list, vector<float> y_list, vector<float> z_list,
+    vector<float> range_list, vector<float> doppler_list, vector<float> power_list, int label)
   {
     float x_min = *min_element(x_list.begin(), x_list.end());
     float x_max = *max_element(x_list.begin(), x_list.end());
@@ -780,10 +708,42 @@ public:
     float doppler_mean = (doppler_min + doppler_max) / 2;
     float power_mean = (power_min + power_max) / 2;
 
+
+    float min_range = 999;
+    int min_range_index = -1;
+    for (int i = 0;i < range_list.size();i++)
+    {
+      if (range_list[i] < min_range)
+      {
+        min_range = range_list[i];
+        min_range_index = i;
+      }
+    }
+
     PointAO arbe_object;
-    arbe_object.x = x_mean;
-    arbe_object.y = y_mean;
-    arbe_object.z = z_mean;
+    // arbe_object.x = x_mean;
+    // arbe_object.y = y_mean;
+    // arbe_object.y = z_mean;
+    arbe_object.x = get_mean(x_list);
+    arbe_object.y = get_mean(y_list);
+    arbe_object.z = get_mean(z_list);
+
+    // arbe_object.x = (double)accumulate(x_list.begin(), x_list.end(), 0.0) / x_list.size();
+    // arbe_object.y = (double)accumulate(y_list.begin(), y_list.end(), 0.0) / y_list.size();
+    // arbe_object.y = (double)accumulate(z_list.begin(), z_list.end(), 0.0) / z_list.size();
+
+
+    arbe_object.range = sqrt(arbe_object.x * arbe_object.x
+      + arbe_object.y * arbe_object.y + arbe_object.z * arbe_object.z);
+
+    // arbe_object.x = x_list[min_range_index];
+    // arbe_object.y = y_list[min_range_index];
+
+    // arbe_object.z = z_list[min_range_index];
+
+    // arbe_object.range = range_list[min_range_index];
+
+    arbe_object.azimuth = arbe_object.y > 0.001 ? atan2(arbe_object.x, arbe_object.y) : 0;
 
     arbe_object.doppler = doppler_mean;
     arbe_object.power = power_max;
@@ -794,6 +754,11 @@ public:
 
     arbe_object.quantity = x_list.size();
     arbe_object.label = label;
+
+    arbe_object.counter = 0;
+
+    arbe_object.noise_range = 0.5;
+    arbe_object.noise_azimuth = 3 / 180 * 3.1415;
 
     return arbe_object;
   }
@@ -808,7 +773,7 @@ public:
         && abs(arbe_object_search.y - arbe_object.y) - abs(arbe_object_search.length + arbe_object.length) / 2 < MAX_OBJECT_DISTANCE
         && abs(arbe_object_search.z - arbe_object.z) - abs(arbe_object_search.high + arbe_object.high) / 2 < MAX_OBJECT_DISTANCE
         && abs(arbe_object_search.doppler - arbe_object.doppler) < Min_OBJECT_DOPPLER)
-        | (abs(arbe_object_search.x - arbe_object.x) - abs(arbe_object_search.width + arbe_object.width) / 2 <= 0
+        || (abs(arbe_object_search.x - arbe_object.x) - abs(arbe_object_search.width + arbe_object.width) / 2 <= 0
           && abs(arbe_object_search.y - arbe_object.y) - abs(arbe_object_search.length + arbe_object.length) / 2 <= 0
           && abs(arbe_object_search.z - arbe_object.z) - abs(arbe_object_search.high + arbe_object.high) / 2 <= 0
           && abs(arbe_object_search.doppler - arbe_object.doppler) < MAX_OBJECT_DOPPLER))
@@ -822,9 +787,17 @@ public:
           + arbe_object_search.y * arbe_object_search.quantity)
           / (arbe_object.quantity + arbe_object_search.quantity);
 
+        // arbe_object_merge.x = min(arbe_object.x, arbe_object_search.x);
+
+        // arbe_object_merge.y = min(arbe_object.y, arbe_object_search.y);
+
         arbe_object_merge.z = (arbe_object.z * arbe_object.quantity
           + arbe_object_search.z * arbe_object_search.quantity)
           / (arbe_object.quantity + arbe_object_search.quantity);
+
+        arbe_object_merge.range = sqrt(arbe_object_merge.x * arbe_object_merge.x
+          + arbe_object_merge.y * arbe_object_merge.y
+          + arbe_object_merge.z * arbe_object_merge.z);
 
         arbe_object_merge.doppler = (arbe_object.doppler * arbe_object.quantity
           + arbe_object_search.doppler * arbe_object_search.quantity)
@@ -859,6 +832,18 @@ public:
     }
     return final_label;
   }
+
+
+  float get_mean(vector<float>& input)
+  {
+    float ret = 0;
+    for (auto i : input)
+    {
+      ret += i;
+    }
+    return ret / input.size();
+  }
+
 
   void get_obb(PointCloudA::Ptr single_object_pcl)
   {
@@ -1082,6 +1067,8 @@ public:
       if (label == OUTLIER_LABEL)
       {
         arbe_outlier_pcl->push_back(arbe_origin_pcl->points[i]);
+        arbe_outlier_pcl->back().power_value = label;
+        arbe_outlier_pcl->back().doppler_bin = relate_doppler_list[i];
       }
       else if (label > 0 and label < 8192)
       {
@@ -1092,11 +1079,13 @@ public:
       else
       {
         arbe_static_pcl->push_back(arbe_origin_pcl->points[i]);
-        arbe_static_pcl->back().power = relate_doppler_list[i];
+        arbe_static_pcl->back().power_value = label;
+        arbe_static_pcl->back().doppler_bin = relate_doppler_list[i];
       }
     }
 
     project_pointcloud(arbe_static_pcl, arbe_static_front_pcl);
+    project_pointcloud(arbe_moving_pcl, arbe_moving_front_pcl);
 
     get_object_real();
 

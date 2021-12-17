@@ -8,6 +8,8 @@
 #include <pcl/pcl_macros.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/features/moment_of_inertia_estimation.h>
+#include <pcl/filters/passthrough.h>
+#include <pcl/filters/impl/passthrough.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <sensor_msgs/CompressedImage.h>
 #include <opencv2/opencv.hpp>
@@ -35,10 +37,12 @@
 
 #include "ceres_factor.hpp"
 #include "arbe_slam/CANROS.h"
-
+#include "ekf.h"
 
 using namespace std;
 
+
+//arbe
 struct  EIGEN_ALIGN16 ArbePointXYZRGBGeneric
 {
   PCL_ADD_POINT4D;
@@ -98,6 +102,9 @@ struct EIGEN_ALIGN16 ArbeObjec
   float high;
   int quantity;
   int label;
+  int counter;
+  float noise_range;
+  float noise_azimuth;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
@@ -118,6 +125,9 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(ArbeObjec,           // here we assume a XYZRG
   (float, high, high)
   (int, quantity, quantity)
   (int, label, label)
+  (int, counter, counter)
+  (float, noise_range, noise_range)
+  (float, noise_azimuth, noise_azimuth)
 )
 
 typedef ArbeObjec PointAO;
@@ -135,18 +145,18 @@ struct PointQT
 {
   PCL_ADD_POINT4D;
   PCL_ADD_INTENSITY;
-  float qx;
-  float qy;
-  float qz;
-  float qw;
+  double qx;
+  double qy;
+  double qz;
+  double qw;
   double time;
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 } EIGEN_ALIGN16;
 
 POINT_CLOUD_REGISTER_POINT_STRUCT(PointQT,
-  (float, x, x) (float, y, y)
-  (float, z, z) (float, intensity, intensity)
-  (float, qx, qx) (float, qy, qy) (float, qz, qz)(float, qw, qw)
+  (double, x, x) (double, y, y)
+  (double, z, z) (double, intensity, intensity)
+  (double, qx, qx) (double, qy, qy) (double, qz, qz)(double, qw, qw)
   (double, time, time)
 )
 typedef pcl::PointCloud<PointQT> PointCloudQT;
@@ -203,6 +213,18 @@ typedef struct
 
 }ProjectInfo;
 
+float range_res = 0.639;
+float range_bias = -0.639;
+float azimuth_res = -0.0156;
+float azimuth_bias = 1.0014;
+//-63.94890472226788 -0.8972650848906567 57.37911942429021
+float elevation_res = -0.0212;
+float elevation_bias = 0.339;
+//-16.017821758490438 -1.2133574193589876 19.435342872634198
+float power_res = 0.;
+float power_bias = 116.0;
+
+//feature
 
 string arbe_origin_topic = "/arbe/rviz/pointcloud";
 string arbe_project_topic = "/arbe/feature/project";
@@ -215,41 +237,7 @@ string arbe_object_topic = "/arbe/feature/object";
 string arbe_object_real_topic = "/arbe/feature/object_real";
 string arbe_object_marker_topic = "/arbe/feature/object_marker";
 
-string arbe_os_cfar_topic = "/arbe/feature/os_cfar";
-string arbe_project_image_topic = "/arbe/feature/project_image/compressed";
-string dbw_topic = "/dbw_rx";
 
-
-string arbe_ego_doppler_topic = "/arbe/feature/ego_doppler";
-string arbe_ego_doppler_kf_topic = "/arbe/feature/ego_doppler_kf";
-string arbe_ego_doppler_x_topic = "/arbe/feature/ego_doppler_x";
-string arbe_ego_doppler_y_topic = "/arbe/feature/ego_doppler_y";
-
-string arbe_radar_odometry_topic = "/arbe/odometry/radar_odometry";
-string arbe_radar_path_topic = "/arbe/odometry/radar_path";
-string arbe_feature_xyz_us_old_icp_topic = "/arbe/odometry/feature_xyz_us_old_icp";
-string arbe_after_odometry_topic = "/arbe/odometry/arbe_after_odometry";
-string icp_score_topic = "/arbe/odometry/icp_score";
-
-
-
-string arbe_mapping_odometry_topic = "/arbe/mapping/radar_odometry";
-string arbe_mapping_path_topic = "/arbe/mapping/radar_path";
-string arbe_mapping_topic = "/arbe/mapping/mapping";
-string arbe_after_mappling_topic = "/arbe/mapping/after_mapping";
-
-string frame_id = "image_radar";
-
-float range_res = 0.639;
-float range_bias = -0.639;
-float azimuth_res = -0.0156;
-float azimuth_bias = 1.0014;
-//-63.94890472226788 -0.8972650848906567 57.37911942429021
-float elevation_res = -0.0212;
-float elevation_bias = 0.339;
-//-16.017821758490438 -1.2133574193589876 19.435342872634198
-float power_res = 0.;
-float power_bias = 116.0;
 
 int RANGE_WIDTH = 512;
 int AZIMUTH_WIDTH = 128;
@@ -258,7 +246,7 @@ int ELEVATION_WIDTH = 32;
 float MAX_SEGMENT_DISTANCE = 0.7;
 float MIN_SEGMENT_DISTANCE = 0.2;
 float MIN_SEGMENT_NUMBER = 4;
-float MAX_SEGMENT_DOPPLER_THRE = 0.2;
+float MAX_SEGMENT_DOPPLER_THRE = 0.5;
 int SEARCH_RAIUS_RATE = 30;
 float STATIC_MOVING_THRE = 0.3;
 float MAX_OBJECT_DISTANCE = 1;
@@ -286,7 +274,9 @@ vector<vector<int>> neighbor_iterator_static =
 vector<vector<int>> neighbor_iterator_moving =
 { {-1,0,0},{1,0,0},
 {0,-1,0},{0,1,0},
-{0,0,-1},{0,0,1} };
+{0,0,-1},{0,0,1} ,
+{-1,0,-1},{-1,0,1} ,
+{1,0,-1},{1,0,1} };
 
 vector<vector<int>> neighbor_iterator =
 { {-1,0,0},{1,0,0},
@@ -296,10 +286,19 @@ vector<vector<int>> neighbor_iterator =
 double motion_estimate[2] = { 0,0 };
 
 //需要使用xyz类型的点云
-
 int MAX_ICP_NUMBER = 20;
 float UNIFORM_SAMPLEING_RADIUS = 0.01;
 
+
+//os-cfar
+string arbe_os_cfar_topic = "/arbe/feature/os_cfar";
+string arbe_project_image_topic = "/arbe/feature/project_image/compressed";
+string dbw_topic = "/dbw_rx";
+
+string arbe_ego_doppler_topic = "/arbe/feature/ego_doppler";
+string arbe_ego_doppler_kf_topic = "/arbe/feature/ego_doppler_kf";
+string arbe_ego_doppler_x_topic = "/arbe/feature/ego_doppler_x";
+string arbe_ego_doppler_y_topic = "/arbe/feature/ego_doppler_y";
 
 int OS_CFAR_RADIUS = 4;
 int OS_CFAR_RADIUS_RANGE = 8;
@@ -317,8 +316,38 @@ int PITCH_BIAS = 0.1;
 int Z_BIAS = 1.5;
 int Z_THRE = 1;
 
+//odometry
+string arbe_radar_odometry_topic = "/arbe/odometry/radar_odometry";
+string arbe_radar_path_topic = "/arbe/odometry/radar_path";
+string arbe_feature_xyz_us_old_icp_topic = "/arbe/odometry/feature_xyz_us_old_icp";
+string arbe_after_odometry_topic = "/arbe/odometry/arbe_after_odometry";
+string icp_score_topic = "/arbe/odometry/icp_score";
+
+float ODOMETRY_ICP_MCD = 3;
 
 //mapping
-float KEY_POSE_SEARCH_RADIUS = 50.0;
+string arbe_mapping_odometry_topic = "/arbe/mapping/radar_odometry";
+string arbe_mapping_path_topic = "/arbe/mapping/radar_path";
+string arbe_mapping_topic = "/arbe/mapping/mapping";
+string arbe_feature_mapped_topic = "/arbe/mapping/feature_mapped";
+
+string arbe_submap_topic = "/arbe/mapping/submap";
+string mapping_icp_score_topic = "/arbe/mapping/icp_score";
+string frame_id = "image_radar";
+
+
+float MAPPING_ICP_MCD = 10;
+float KEY_POSE_SEARCH_RADIUS = 25.0;
 float  KEY_POSE_US_RADIUS = 0.01;
 float  SUB_MAP_US_RADIUS = 0.01;
+
+float KEY_POSE_T_THRESHOULD = 0.3;
+float KEY_POSE_Q_THRESHOULD = 20 / 180. * 3.14159;
+
+//tracing
+
+string arbe_object_trace_topic = "/arbe/tracing/object_trace";
+string arbe_object_predict_topic = "/arbe/tracing/object_predict";
+string arbe_object_trace_valid_topic = "/arbe/tracing/object_trace_valid";
+
+double MIN_COORELATION = 4;
